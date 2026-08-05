@@ -4,7 +4,8 @@ from datetime import datetime
 import re
 
 # Base directory paths
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.path.dirname(BACKEND_DIR)
 IS_VERCEL = os.environ.get('VERCEL') is not None
 
 if IS_VERCEL:
@@ -12,9 +13,9 @@ if IS_VERCEL:
     DB_PATH = os.path.join(DB_DIR, "attendance.db")
     DATASET_DIR = "/tmp/dataset"
 else:
-    DB_DIR = os.path.join(BASE_DIR, "attendance")
+    DB_DIR = os.path.join(BACKEND_DIR, "attendance")
     DB_PATH = os.path.join(DB_DIR, "attendance.db")
-    DATASET_DIR = os.path.join(BASE_DIR, "dataset")
+    DATASET_DIR = os.path.join(BACKEND_DIR, "dataset")
 
 def init_db():
     """Initializes the SQLite database and creates tables if they do not exist."""
@@ -23,7 +24,7 @@ def init_db():
     
     # If running on Vercel, copy pre-bundled datasets to the writable /tmp folder
     if IS_VERCEL:
-        src_dataset = os.path.join(BASE_DIR, "dataset")
+        src_dataset = os.path.join(BACKEND_DIR, "dataset")
         if os.path.exists(src_dataset):
             import shutil
             for item in os.listdir(src_dataset):

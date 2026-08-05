@@ -21,7 +21,8 @@ try:
     from face_recognizer import FaceRecognizerWrapper, train_model_async, get_training_status
 
     # Configure path variables based on serverless execution environment
-    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+    BASE_DIR = os.path.dirname(BACKEND_DIR)
     IS_VERCEL = os.environ.get('VERCEL') is not None
 
     if IS_VERCEL:
@@ -30,9 +31,9 @@ try:
         MODEL_PATH = os.path.join(MODEL_DIR, "face_trainer.yml")
         ATTENDANCE_DIR = "/tmp/attendance"
     else:
-        DATASET_DIR = os.path.join(BASE_DIR, "dataset")
-        MODEL_PATH = os.path.join(BASE_DIR, "models", "face_trainer.yml")
-        ATTENDANCE_DIR = os.path.join(BASE_DIR, "attendance")
+        DATASET_DIR = os.path.join(BACKEND_DIR, "dataset")
+        MODEL_PATH = os.path.join(BACKEND_DIR, "models", "face_trainer.yml")
+        ATTENDANCE_DIR = os.path.join(BACKEND_DIR, "attendance")
 
     # Preload files if running on Vercel
     if IS_VERCEL:
@@ -41,7 +42,7 @@ try:
         os.makedirs(ATTENDANCE_DIR, exist_ok=True)
         
         # Copy prebuilt model from bundle to writeable /tmp/models directory
-        src_model = os.path.join(BASE_DIR, "models", "face_trainer.yml")
+        src_model = os.path.join(BACKEND_DIR, "models", "face_trainer.yml")
         if os.path.exists(src_model) and not os.path.exists(MODEL_PATH):
             import shutil
             try:

@@ -13,18 +13,19 @@ training_status = {
 }
 
 # Configure paths based on serverless execution environment
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.path.dirname(BACKEND_DIR)
 IS_VERCEL = os.environ.get('VERCEL') is not None
 
 if IS_VERCEL:
     DATASET_DIR = "/tmp/dataset"
     MODEL_PATH = "/tmp/models/face_trainer.yml"
 else:
-    DATASET_DIR = os.path.join(BASE_DIR, "dataset")
-    MODEL_PATH = os.path.join(BASE_DIR, "models", "face_trainer.yml")
+    DATASET_DIR = os.path.join(BACKEND_DIR, "dataset")
+    MODEL_PATH = os.path.join(BACKEND_DIR, "models", "face_trainer.yml")
 
 # Local cascades path (guaranteed to be bundled on Vercel)
-CASCADES_DIR = os.path.join(BASE_DIR, "backend", "cascades")
+CASCADES_DIR = os.path.join(BACKEND_DIR, "cascades")
 FACE_CASCADE_PATH = os.path.join(CASCADES_DIR, "haarcascade_frontalface_default.xml")
 EYE_CASCADE_PATH = os.path.join(CASCADES_DIR, "haarcascade_eye.xml")
 
