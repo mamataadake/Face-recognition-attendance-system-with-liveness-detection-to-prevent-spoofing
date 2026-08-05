@@ -63,32 +63,79 @@ def get_db_connection():
     return conn
 
 def get_all_students():
-    """Resolves student list directly from the folder structure for serverless synchronization."""
+    """Resolves student list from Cloud KV (with folder structure fallback)."""
     students = []
-    # Use the bundled dataset path as the single source of truth
-    src_dataset = os.path.join(BACKEND_DIR, "dataset")
-    if os.path.exists(src_dataset):
-        for folder in os.listdir(src_dataset):
-            match = re.match(r"^(\d+)_(.+)$", folder)
-            if match:
-                s_id = int(match.group(1))
-                s_name = match.group(2).replace("_", " ")
-                students.append({
-                    "id": s_id,
-                    "name": s_name,
-                    "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                })
-    return sorted(students, key=lambda x: x["id"])
+    
+    # 1. Try to load from Cloud KV
+    try:
+        res = requests.get(KV_BUCKET + "students", timeout=2.0)
+        if res.status_code == 200:
+            students = res.json()
+    except Exception as e:
+        print(f"Cloud KV Students Fetch Exception: {e}")
+        
+    # 2. Fallback to folder structure if Cloud KV is empty or fails
+    if not students:
+        src_dataset = os.path.join(BACKEND_DIR, "dataset")
+        if os.path.exists(src_dataset):
+            for folder in os.listdir(src_dataset):
+                match = re.match(r"^(\d+)_(.+)$", folder)
+                if match:
+                    s_id = int(match.group(1))
+                    s_name = match.group(2).replace("_", " ")
+                    students.append({
+                        "id": s_id,
+                        "name": s_name,
+                        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    })
+                    
+    return sorted(students, key=lambda x: int(x["id"]))
+
+def get_student_name(student_id):
+    """Looks up a student's name by ID (Cloud KV + folder lookup)."""
+    students = get_all_students()
+    for s in students:
+        if int(s["id"]) == int(student_id):
+            return s["name"]
+    return None
 
 def add_student(student_id, name):
-    """Creates a new student folder to store captures."""
+    """Creates a new student folder and registers them in Cloud KV."""
+    # 1. Update Cloud KV students list
+    students = get_all_students()
+    # Check if ID already exists
+    for s in students:
+        if int(s["id"]) == int(student_id):
+            return False
+            
+    students.append({
+        "id": int(student_id),
+        "name": name,
+        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    })
+    
+    try:
+        requests.put(KV_BUCKET + "students", data=json.dumps(students), headers={"Content-Type": "application/json"}, timeout=2.0)
+    except Exception as e:
+        print(f"Cloud KV add_student error: {e}")
+        
+    # 2. Create the directory local to the current instance
     folder_name = f"{student_id}_{name.replace(' ', '_')}"
     new_dir = os.path.join(DATASET_DIR, folder_name)
     os.makedirs(new_dir, exist_ok=True)
     return True
 
 def delete_student(student_id):
-    """Deletes a student folder."""
+    """Deletes a student folder and removes them from Cloud KV."""
+    # 1. Update Cloud KV students list
+    students = get_all_students()
+    students = [s for s in students if int(s["id"]) != int(student_id)]
+    try:
+        requests.put(KV_BUCKET + "students", data=json.dumps(students), headers={"Content-Type": "application/json"}, timeout=2.0)
+    except Exception as e:
+        print(f"Cloud KV delete_student error: {e}")
+
+    # 2. Clean directories
     src_dataset = os.path.join(BACKEND_DIR, "dataset")
     if os.path.exists(src_dataset):
         for folder in os.listdir(src_dataset):

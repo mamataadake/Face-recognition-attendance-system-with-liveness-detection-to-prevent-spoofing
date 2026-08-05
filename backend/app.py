@@ -390,14 +390,9 @@ else:
         student_id = int(data['student_id'])
         count = int(data['count'])
         
-        conn = db.get_db_connection()
-        row = conn.execute("SELECT name FROM students WHERE id = ?", (student_id,)).fetchone()
-        conn.close()
-        
-        if not row:
+        student_name = db.get_student_name(student_id)
+        if not student_name:
             return jsonify({"success": False, "message": "Student ID not found in database."}), 404
-            
-        student_name = row['name']
         folder_name = f"{student_id}_{student_name.replace(' ', '_')}"
         save_path = os.path.join(DATASET_DIR, folder_name)
         os.makedirs(save_path, exist_ok=True)
