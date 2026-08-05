@@ -1,7 +1,6 @@
 import cv2
 import os
 import numpy as np
-from PIL import Image
 import threading
 
 # Global variables for training state
@@ -146,9 +145,10 @@ def _run_training_async(dataset_path, model_path):
                 if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
                     img_path = os.path.join(folder_path, filename)
                     try:
-                        # Open in grayscale
-                        img = Image.open(img_path).convert("L")
-                        img_numpy = np.array(img, "uint8")
+                        # Open in grayscale using OpenCV's fast native reader
+                        img_numpy = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+                        if img_numpy is None:
+                            continue
                         
                         faces.append(img_numpy)
                         ids.append(student_id)
