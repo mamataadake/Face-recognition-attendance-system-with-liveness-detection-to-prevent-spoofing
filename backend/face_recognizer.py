@@ -64,7 +64,7 @@ class FaceRecognizerWrapper:
         """Loads or reloads the LBPH recognizer model from disk."""
         if os.path.exists(self.model_path):
             try:
-                self.recognizer = cv2.face.LBPHFaceRecognizer_create()
+                self.recognizer = cv2.face.LBPHFaceRecognizer_create(radius=1, neighbors=8, grid_x=9, grid_y=9)
                 self.recognizer.read(self.model_path)
                 print(f"Face Recognizer: Successfully loaded model from {self.model_path}")
                 return True
@@ -85,9 +85,10 @@ class FaceRecognizerWrapper:
             return None, None
             
         try:
-            # Preprocess the face crop (Resize to 90x90 for fast calculation and Equalize histogram)
+            # Preprocess the face crop (Resize to 90x90 for fast calculation and localized contrast equalization)
             face_resized = cv2.resize(face_gray, (90, 90))
-            face_equalized = cv2.equalizeHist(face_resized)
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            face_equalized = clahe.apply(face_resized)
             
             student_id, confidence = self.recognizer.predict(face_equalized)
             return student_id, confidence
@@ -151,9 +152,10 @@ def _run_training_async(dataset_path, model_path):
                         if img_numpy is None:
                             continue
                         
-                        # Downsample to 90x90 to optimize speed and contrast equalize
+                        # Downsample to 90x90 to optimize speed and localized contrast equalize
                         img_resized = cv2.resize(img_numpy, (90, 90))
-                        img_equalized = cv2.equalizeHist(img_resized)
+                        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+                        img_equalized = clahe.apply(img_resized)
                         
                         faces.append(img_equalized)
                         ids.append(student_id)
@@ -173,7 +175,7 @@ def _run_training_async(dataset_path, model_path):
 
         set_training_status("training", 85, "Training the LBPH Face Recognizer model...")
         
-        recognizer = cv2.face.LBPHFaceRecognizer_create()
+        recognizer = cv2.face.LBPHFaceRecognizer_create(radius=1, neighbors=8, grid_x=9, grid_y=9)
         recognizer.train(faces, np.array(ids))
         
         set_training_status("training", 95, "Saving trained model to disk...")
