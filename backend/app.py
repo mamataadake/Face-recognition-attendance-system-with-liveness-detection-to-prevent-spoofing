@@ -313,7 +313,7 @@ else:
         names_mapping = {s['id']: s['name'] for s in students_list}
         predicted_name = "Unknown"
         
-        if predicted_id is not None and confidence < 75:
+        if predicted_id is not None and confidence < 88:
             predicted_name = names_mapping.get(predicted_id, "Unknown")
         else:
             predicted_id = None

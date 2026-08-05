@@ -519,6 +519,9 @@ document.addEventListener("DOMContentLoaded", () => {
         // 1. Draw Bounding Box and label on canvas
         let color = "#3b82f6"; // Soft Blue
         let labelText = data.name;
+        if (data.name !== "Unknown") {
+            labelText += ` (${Math.max(0, 100 - data.confidence).toFixed(0)}%)`;
+        }
         
         if (data.liveness_state === "VERIFIED") {
             color = "#10b981"; // Emerald Green
