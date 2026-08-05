@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Face Attendance & Liveness Dashboard</title>
+    <!-- Google Fonts: Outfit -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- Custom Style Sheet -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <!-- Chart.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Lucide Icons CDN -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar">
+            <div class="logo-area">
+                <i data-lucide="shield-check" class="logo-icon"></i>
+                <div class="logo-text">
+                    <h2>SentinelFace</h2>
+                    <span>Attendance & Anti-Spoof</span>
+                </div>
+            </div>
+            <nav class="nav-links">
+                <a href="#" class="nav-link active" data-tab="dashboard">
+                    <i data-lucide="layout-dashboard"></i>
+                    <span>Dashboard</span>
+                </a>
+                <a href="#" class="nav-link" data-tab="students">
+                    <i data-lucide="users"></i>
+                    <span>Students</span>
+                </a>
+                <a href="#" class="nav-link" data-tab="camera">
+                    <i data-lucide="video"></i>
+                    <span>Live Recognition</span>
+                </a>
+                <a href="#" class="nav-link" data-tab="training">
+                    <i data-lucide="cpu"></i>
+                    <span>Model Training</span>
+                </a>
+                <a href="#" class="nav-link" data-tab="attendance">
+                    <i data-lucide="calendar-check"></i>
+                    <span>Attendance Log</span>
+                </a>
+            </nav>
+            <div class="sidebar-footer">
+                <div class="system-status">
+                    <span class="status-indicator online"></span>
+                    <span>System Online</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <!-- Top Header Bar -->
+            <header class="top-header">
+                <h1 id="tab-title">Dashboard</h1>
+                <div class="user-profile">
+                    <i data-lucide="user" class="profile-icon"></i>
+                    <span>System Admin</span>
+                </div>
+            </header>
+
+            <div class="content-body">
+                <!-- TAB 1: DASHBOARD -->
+                <section id="dashboard-tab" class="tab-pane active">
+                    <div class="welcome-banner">
+                        <div class="welcome-text">
+                            <h3>Welcome Back, Admin</h3>
+                            <p>Here is the system overview for today. Real-time face recognition and liveness checking are active.</p>
+                        </div>
+                        <i data-lucide="sparkles" class="banner-sparkle"></i>
+                    </div>
+
+                    <!-- KPI Cards Grid -->
+                    <div class="kpi-grid">
+                        <div class="kpi-card">
+                            <div class="kpi-icon student-kpi"><i data-lucide="users"></i></div>
+                            <div class="kpi-info">
+                                <span class="kpi-label">Total Students</span>
+                                <h3 id="stat-students">0</h3>
+                            </div>
+                        </div>
+                        <div class="kpi-card">
+                            <div class="kpi-icon images-kpi"><i data-lucide="image"></i></div>
+                            <div class="kpi-info">
+                                <span class="kpi-label">Total Face Images</span>
+                                <h3 id="stat-images">0</h3>
+                            </div>
+                        </div>
+                        <div class="kpi-card">
+                            <div class="kpi-icon model-kpi"><i data-lucide="activity"></i></div>
+                            <div class="kpi-info">
+                                <span class="kpi-label">Model Status</span>
+                                <h3 id="stat-model">Not Trained</h3>
+                            </div>
+                        </div>
+                        <div class="kpi-card">
+                            <div class="kpi-icon attendance-kpi"><i data-lucide="calendar-range"></i></div>
+                            <div class="kpi-info">
+                                <span class="kpi-label">Attendance Today</span>
+                                <h3 id="stat-attendance">0</h3>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Chart & Insights -->
+                    <div class="dashboard-details">
+                        <div class="chart-container card">
+                            <div class="card-header">
+                                <h3>Attendance Trend (Last 7 Days)</h3>
+                            </div>
+                            <div class="chart-wrapper">
+                                <canvas id="attendanceChart"></canvas>
+                            </div>
+                        </div>
+                        <div class="insights-container card">
+                            <div class="card-header">
+                                <h3>Model Details</h3>
+                            </div>
+                            <div class="model-meta-info">
+                                <div class="meta-row">
+                                    <span>Algorithm:</span>
+                                    <strong>LBPH Face Recognizer</strong>
+                                </div>
+                                <div class="meta-row">
+                                    <span>Detector:</span>
+                                    <strong>Haar Cascade</strong>
+                                </div>
+                                <div class="meta-row">
+                                    <span>Liveness Check:</span>
+                                    <strong>Blink + Movement</strong>
+                                </div>
+                                <div class="meta-row">
+                                    <span>Last Trained:</span>
+                                    <strong id="stat-trained-time">N/A</strong>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- TAB 2: STUDENTS -->
+                <section id="students-tab" class="tab-pane">
+                    <div class="students-layout">
+                        <!-- Left Panel: Student Registration -->
+                        <div class="card student-register-card">
+                            <div class="card-header">
+                                <h3>Register New Student</h3>
+                            </div>
+                            <form id="register-form" class="modern-form">
+                                <div class="form-group">
+                                    <label for="student-id">Student ID (Numeric)</label>
+                                    <input type="number" id="student-id" placeholder="e.g. 1" required min="1">
+                                </div>
+                                <div class="form-group">
+                                    <label for="student-name">Full Name</label>
+                                    <input type="text" id="student-name" placeholder="e.g. Mamata Adake" required>
+                                </div>
+                                <button type="submit" class="btn primary-btn btn-full">
+                                    <i data-lucide="plus-circle"></i>
+                                    Register & Start Camera
+                                </button>
+                            </form>
+                        </div>
+
+                        <!-- Right Panel: Students List -->
+                        <div class="card students-list-card">
+                            <div class="card-header">
+                                <h3>Registered Students</h3>
+                            </div>
+                            <div class="table-container">
+                                <table id="students-table" class="modern-table">
+                                    <thead>
+                                        <tr>
+                                            <th>ID</th>
+                                            <th>Name</th>
+                                            <th>Image Count</th>
+                                            <th>Registration Date</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <!-- Dynamically generated rows -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- TAB 3: LIVE RECOGNITION -->
+                <section id="camera-tab" class="tab-pane">
+                    <div class="camera-layout">
+                        <!-- Left Panel: Webcam Video Frame -->
+                        <div class="camera-feed-container card">
+                            <div class="card-header">
+                                <h3>Webcam Attendance Scanner</h3>
+                                <div class="camera-status-pill offline" id="cam-pill">Offline</div>
+                            </div>
+                            <div class="video-frame-wrapper">
+                                <div class="video-placeholder" id="video-placeholder">
+                                    <i data-lucide="video-off" class="placeholder-icon"></i>
+                                    <p>Camera is stopped. Click 'Start Scanner' below.</p>
+                                </div>
+                                <img src="" alt="Webcam Feed" id="webcam-feed" class="webcam-feed-img hidden">
+                                <div class="scanner-laser hidden" id="laser-line"></div>
+                            </div>
+                            <div class="camera-controls">
+                                <button id="btn-start-recognition" class="btn primary-btn">
+                                    <i data-lucide="play"></i>
+                                    Start Scanner
+                                </button>
+                                <button id="btn-stop-recognition" class="btn danger-btn" disabled>
+                                    <i data-lucide="square"></i>
+                                    Stop Scanner
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Right Panel: Liveness and Verification Status -->
+                        <div class="camera-sidebar card">
+                            <div class="card-header">
+                                <h3>Verification Console</h3>
+                            </div>
+                            
+                            <div class="verification-stats">
+                                <!-- Step 1: Eye Blink -->
+                                <div class="ver-step" id="step-blink">
+                                    <div class="step-info">
+                                        <span class="step-num">Step 1</span>
+                                        <h4>Blink Verification</h4>
+                                        <p id="blink-subtext">Waiting for face...</p>
+                                    </div>
+                                    <div class="step-status">
+                                        <i data-lucide="circle-dashed" class="status-spinner spinner"></i>
+                                    </div>
+                                </div>
+
+                                <!-- Step 2: Head Movement -->
+                                <div class="ver-step" id="step-movement">
+                                    <div class="step-info">
+                                        <span class="step-num">Step 2</span>
+                                        <h4>Head Movement</h4>
+                                        <p id="movement-subtext">Waiting for face...</p>
+                                    </div>
+                                    <div class="step-status">
+                                        <i data-lucide="circle-dashed" class="status-spinner spinner"></i>
+                                    </div>
+                                </div>
+
+                                <!-- Step 3: Verdict -->
+                                <div class="verdict-display card">
+                                    <span class="verdict-label">Liveness Verdict</span>
+                                    <h2 id="verdict-status">NONE</h2>
+                                    <p id="liveness-instruction">Please start camera and step in front of the lens.</p>
+                                </div>
+
+                                <!-- Identity Match -->
+                                <div class="match-info card">
+                                    <span class="verdict-label">Matched Profile</span>
+                                    <h3 id="match-name">--</h3>
+                                    <div class="match-meta">
+                                        <span>Confidence: <strong id="match-confidence">--</strong></span>
+                                    </div>
+                                </div>
+
+                                <!-- Attendance Status Card -->
+                                <div class="attendance-card card" id="att-status-card">
+                                    <div class="att-flex">
+                                        <i data-lucide="info" id="att-icon" class="att-info-icon"></i>
+                                        <div>
+                                            <span class="verdict-label">Attendance Status</span>
+                                            <p id="attendance-log-status" style="font-weight:600; margin:0; font-size: 0.95rem;">Not Logged</p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- TAB 4: MODEL TRAINING -->
+                <section id="training-tab" class="tab-pane">
+                    <div class="card training-card">
+                        <div class="card-header">
+                            <h3>LBPH Face Recognition Model</h3>
+                        </div>
+                        <div class="training-body">
+                            <div class="training-graphic">
+                                <div class="brain-icon-wrapper idle" id="training-icon-box">
+                                    <i data-lucide="cpu" class="training-big-icon"></i>
+                                </div>
+                                <h3 id="train-title">Model Status: Trained</h3>
+                                <p id="train-desc">The LBPH model contains mappings of existing students. Train the model if you add or recapture student datasets.</p>
+                            </div>
+
+                            <!-- Progress Bar -->
+                            <div class="progress-container hidden" id="train-progress-container">
+                                <div class="progress-bar">
+                                    <div class="progress-fill" id="train-progress-fill" style="width: 0%;"></div>
+                                </div>
+                                <div class="progress-text">
+                                    <span id="train-status-msg">Training model...</span>
+                                    <span id="train-percentage">0%</span>
+                                </div>
+                            </div>
+
+                            <button id="btn-train-model" class="btn primary-btn">
+                                <i data-lucide="refresh-cw"></i>
+                                Rebuild & Train Model
+                            </button>
+
+                            <!-- Training Success Details Card -->
+                            <div class="card details-card hidden" id="training-details-card">
+                                <div class="card-header">
+                                    <h4>Training Statistics</h4>
+                                </div>
+                                <div class="details-body" id="training-details-body">
+                                    <!-- Dynamic Details -->
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- TAB 5: ATTENDANCE LOG -->
+                <section id="attendance-tab" class="tab-pane">
+                    <div class="card attendance-log-card">
+                        <div class="card-header flex-header">
+                            <h3>Attendance Register</h3>
+                            <button id="btn-export-csv" class="btn success-btn">
+                                <i data-lucide="download"></i>
+                                Export CSV
+                            </button>
+                        </div>
+                        <!-- Filters -->
+                        <div class="filter-bar">
+                            <div class="filter-group">
+                                <label for="filter-date">Date</label>
+                                <input type="date" id="filter-date">
+                            </div>
+                            <div class="filter-group">
+                                <label for="filter-name">Student Name</label>
+                                <input type="text" id="filter-name" placeholder="Search name...">
+                            </div>
+                            <div class="filter-actions">
+                                <button id="btn-apply-filters" class="btn primary-btn">
+                                    <i data-lucide="search"></i>
+                                    Apply
+                                </button>
+                                <button id="btn-clear-filters" class="btn secondary-btn">
+                                    Clear
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Logs Table -->
+                        <div class="table-container scrollable-table">
+                            <table id="attendance-table" class="modern-table">
+                                <thead>
+                                    <tr>
+                                        <th>Date</th>
+                                        <th>Time</th>
+                                        <th>Student ID</th>
+                                        <th>Student Name</th>
+                                        <th>Liveness Status</th>
+                                        <th>Attendance</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <!-- Dynamic rows -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+            </div>
+        </main>
+    </div>
+
+    <!-- Face Capture Registration Modal -->
+    <div class="modal-overlay hidden" id="capture-modal">
+        <div class="modal-content card">
+            <div class="card-header">
+                <h3>Registering Face Dataset</h3>
+                <span class="student-pill" id="modal-student-name">Mamata (ID: 1)</span>
+            </div>
+            <div class="modal-body">
+                <p class="modal-desc">Look directly into the camera and tilt your head slowly in different angles to capture all face features.</p>
+                <div class="modal-video-wrapper">
+                    <img src="" alt="Registration Camera Feed" id="registration-feed" class="registration-feed-img">
+                    <div class="scanning-scanner"></div>
+                </div>
+                <div class="capture-progress">
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="capture-progress-fill" style="width: 0%"></div>
+                    </div>
+                    <span id="capture-count-text">Captured 0 / 40 images</span>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="btn-cancel-capture" class="btn danger-btn">Cancel Capture</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Custom Script -->
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
