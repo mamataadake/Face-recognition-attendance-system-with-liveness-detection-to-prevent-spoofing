@@ -8,6 +8,10 @@ from flask import Flask, Response, jsonify, request, render_template, send_file
 import cv2
 import numpy as np
 
+# Add backend directory to Python path to support Vercel serverless imports
+import sys
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 # Import custom modules
 import database as db
 from liveness import LivenessDetector
