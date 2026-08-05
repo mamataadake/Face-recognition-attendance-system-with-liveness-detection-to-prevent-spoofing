@@ -43,10 +43,11 @@ try:
         
         # Copy prebuilt model from bundle to writeable /tmp/models directory
         src_model = os.path.join(BACKEND_DIR, "models", "face_trainer.yml")
-        if os.path.exists(src_model) and not os.path.exists(MODEL_PATH):
+        if os.path.exists(src_model):
             import shutil
             try:
                 shutil.copy2(src_model, MODEL_PATH)
+                print(f"Vercel App Init: Propagated model from {src_model} to {MODEL_PATH}")
             except Exception as e:
                 print(f"Vercel App Init: Error copying model: {e}")
 

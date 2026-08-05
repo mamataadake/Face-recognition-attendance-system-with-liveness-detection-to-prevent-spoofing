@@ -48,6 +48,7 @@ class FaceRecognizerWrapper:
     def __init__(self, model_path):
         self.model_path = model_path
         self.recognizer = None
+        self.last_loaded_mtime = 0
         
         # Load cascades from bundled cascades folder
         self.face_cascade = cv2.CascadeClassifier(FACE_CASCADE_PATH)
@@ -66,7 +67,8 @@ class FaceRecognizerWrapper:
             try:
                 self.recognizer = cv2.face.LBPHFaceRecognizer_create(radius=1, neighbors=8, grid_x=9, grid_y=9)
                 self.recognizer.read(self.model_path)
-                print(f"Face Recognizer: Successfully loaded model from {self.model_path}")
+                self.last_loaded_mtime = os.path.getmtime(self.model_path)
+                print(f"Face Recognizer: Successfully loaded model from {self.model_path} (mtime: {self.last_loaded_mtime})")
                 return True
             except Exception as e:
                 print(f"Face Recognizer: Error loading model: {e}")
@@ -74,13 +76,24 @@ class FaceRecognizerWrapper:
         else:
             print(f"Face Recognizer: Model file {self.model_path} not found. Needs training.")
             self.recognizer = None
+            self.last_loaded_mtime = 0
         return False
+
+    def check_and_reload(self):
+        """Checks if the model file on disk has changed and reloads if necessary."""
+        if os.path.exists(self.model_path):
+            mtime = os.path.getmtime(self.model_path)
+            if mtime > getattr(self, 'last_loaded_mtime', 0):
+                print("Face Recognizer: Model file update detected on disk. Auto-reloading...")
+                self.reload_model()
 
     def predict(self, face_gray):
         """
         Predicts the student ID for a given grayscale face crop.
         Returns: (student_id, confidence) or (None, None)
         """
+        self.check_and_reload()
+        
         if self.recognizer is None:
             return None, None
             
