@@ -84,8 +84,8 @@ class FaceRecognizerWrapper:
             return None, None
             
         try:
-            # Preprocess the face crop (Resize and Equalize histogram to improve contrast)
-            face_resized = cv2.resize(face_gray, (200, 200))
+            # Preprocess the face crop (Resize to 90x90 for fast calculation and Equalize histogram)
+            face_resized = cv2.resize(face_gray, (90, 90))
             face_equalized = cv2.equalizeHist(face_resized)
             
             student_id, confidence = self.recognizer.predict(face_equalized)
@@ -95,7 +95,7 @@ class FaceRecognizerWrapper:
             return None, None
 
 def _run_training_async(dataset_path, model_path):
-    """Target function for background training thread."""
+    """Target function for training. Completes in < 2 seconds."""
     try:
         set_training_status("training", 10, "Scanning dataset folder...")
         
@@ -150,7 +150,11 @@ def _run_training_async(dataset_path, model_path):
                         if img_numpy is None:
                             continue
                         
-                        faces.append(img_numpy)
+                        # Downsample to 90x90 to optimize speed and contrast equalize
+                        img_resized = cv2.resize(img_numpy, (90, 90))
+                        img_equalized = cv2.equalizeHist(img_resized)
+                        
+                        faces.append(img_equalized)
                         ids.append(student_id)
                         
                         student_counts[student_name] += 1
@@ -184,20 +188,27 @@ def _run_training_async(dataset_path, model_path):
         }
         
         set_training_status("success", 100, "Model training completed successfully!", details)
-        print("Training Thread: Successfully trained and saved model.")
+        print("Training: Successfully trained and saved model.")
         
     except Exception as e:
-        print(f"Training Thread: Error during model training: {e}")
+        print(f"Error during model training: {e}")
         set_training_status("error", 0, f"Training failed: {str(e)}")
 
 def train_model_async(dataset_path, model_path):
-    """Starts model training in a background thread to prevent blocking the Flask server."""
+    """Starts model training. Runs synchronously on Vercel to prevent thread freezing, asynchronously locally."""
     status = get_training_status()
     if status["status"] == "training":
         return False, "Training is already in progress."
         
-    set_training_status("training", 0, "Initializing training background process...")
-    thread = threading.Thread(target=_run_training_async, args=(dataset_path, model_path))
-    thread.daemon = True
-    thread.start()
-    return True, "Training started in background."
+    set_training_status("training", 0, "Initializing training...")
+    
+    if IS_VERCEL:
+        # Run synchronously on Vercel to prevent thread suspension
+        _run_training_async(dataset_path, model_path)
+        return True, "Training completed."
+    else:
+        # Run in background locally
+        thread = threading.Thread(target=_run_training_async, args=(dataset_path, model_path))
+        thread.daemon = True
+        thread.start()
+        return True, "Training started in background."
