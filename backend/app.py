@@ -312,7 +312,7 @@ else:
         names_mapping = {s['id']: s['name'] for s in students_list}
         predicted_name = "Unknown"
         
-        if predicted_id is not None and confidence < 60:
+        if predicted_id is not None and confidence < 75:
             predicted_name = names_mapping.get(predicted_id, "Unknown")
         else:
             predicted_id = None
@@ -320,14 +320,14 @@ else:
         with sessions_lock:
             if session_id not in sessions:
                 sessions[session_id] = {
-                    "detector": LivenessDetector(blink_target=1, timeout=12),
+                    "detector": LivenessDetector(blink_target=1, timeout=22),
                     "student_id": predicted_id,
                     "attendance_status": "Idle"
                 }
             session_data = sessions[session_id]
             
             if session_data["student_id"] != predicted_id:
-                session_data["detector"] = LivenessDetector(blink_target=1, timeout=12)
+                session_data["detector"] = LivenessDetector(blink_target=1, timeout=22)
                 session_data["student_id"] = predicted_id
                 session_data["attendance_status"] = "Idle"
                 
@@ -336,8 +336,8 @@ else:
         eyes = recognizer_wrapper.eye_cascade.detectMultiScale(
             face_gray,
             scaleFactor=1.1,
-            minNeighbors=6,
-            minSize=(30, 30)
+            minNeighbors=3,
+            minSize=(12, 12)
         )
         
         liveness_state = liveness_detector.update((x, y, w, h), eyes)

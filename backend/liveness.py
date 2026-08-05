@@ -2,7 +2,7 @@ import time
 import numpy as np
 
 class LivenessDetector:
-    def __init__(self, blink_target=1, movement_threshold_x=25, movement_threshold_y=18, window_size=30, timeout=12):
+    def __init__(self, blink_target=1, movement_threshold_x=25, movement_threshold_y=18, window_size=30, timeout=22):
         """
         blink_target: number of blinks required
         movement_threshold_x: horizontal movement range in pixels
