@@ -317,7 +317,7 @@ else:
         
         if predicted_id is not None:
             closest_name = names_mapping.get(predicted_id, "Unknown")
-            if confidence < 88:
+            if confidence < 100:
                 predicted_name = closest_name
             else:
                 predicted_id = None

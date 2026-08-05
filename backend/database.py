@@ -2,6 +2,8 @@ import os
 import sqlite3
 from datetime import datetime
 import re
+import requests
+import json
 
 # Base directory paths
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -17,30 +19,20 @@ else:
     DB_PATH = os.path.join(DB_DIR, "attendance.db")
     DATASET_DIR = os.path.join(BACKEND_DIR, "dataset")
 
+# Anonymous Cloud KV Database Endpoint for serverless synchronization
+KV_BUCKET = "https://kvdb.io/MamataAttendanceSystemV2/"
+
 def init_db():
     """Initializes the SQLite database and creates tables if they do not exist."""
     os.makedirs(DB_DIR, exist_ok=True)
-    os.makedirs(DATASET_DIR, exist_ok=True)
     
-    # If running on Vercel, copy pre-bundled datasets to the writable /tmp folder
-    if IS_VERCEL:
-        src_dataset = os.path.join(BACKEND_DIR, "dataset")
-        if os.path.exists(src_dataset):
-            import shutil
-            for item in os.listdir(src_dataset):
-                s = os.path.join(src_dataset, item)
-                d = os.path.join(DATASET_DIR, item)
-                if os.path.isdir(s) and not os.path.exists(d):
-                    try:
-                        shutil.copytree(s, d)
-                        print(f"Vercel Init: Copied {item} to {d}")
-                    except Exception as e:
-                        print(f"Vercel Init: Error copying {item}: {e}")
-                        
+    # Pre-create the directory for datasets on local machine
+    if not IS_VERCEL:
+        os.makedirs(DATASET_DIR, exist_ok=True)
+        
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
-    # Create Students table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS students (
             id INTEGER PRIMARY KEY,
@@ -49,7 +41,6 @@ def init_db():
         )
     ''')
     
-    # Create Attendance table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS attendance (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -58,154 +49,154 @@ def init_db():
             date TEXT NOT NULL,
             time TEXT NOT NULL,
             liveness_status TEXT NOT NULL,
-            status TEXT NOT NULL,
-            FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE SET NULL
+            status TEXT NOT NULL
         )
     ''')
     
     conn.commit()
     conn.close()
-    
-    # Sync folders to DB on startup
-    sync_dataset_to_db()
 
 def get_db_connection():
-    """Returns a connection to the SQLite database."""
+    """Returns a connection to the local SQLite database."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
-def sync_dataset_to_db():
-    """Scans the dataset directory and adds missing student directories to the database."""
-    if not os.path.exists(DATASET_DIR):
-        return
-        
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    folders = os.listdir(DATASET_DIR)
-    for folder in folders:
-        folder_path = os.path.join(DATASET_DIR, folder)
-        if os.path.isdir(folder_path):
+def get_all_students():
+    """Resolves student list directly from the folder structure for serverless synchronization."""
+    students = []
+    # Use the bundled dataset path as the single source of truth
+    src_dataset = os.path.join(BACKEND_DIR, "dataset")
+    if os.path.exists(src_dataset):
+        for folder in os.listdir(src_dataset):
             match = re.match(r"^(\d+)_(.+)$", folder)
             if match:
-                student_id = int(match.group(1))
-                student_name = match.group(2).replace("_", " ")
-                
-                cursor.execute("SELECT id FROM students WHERE id = ?", (student_id,))
-                row = cursor.fetchone()
-                
-                if not row:
-                    cursor.execute(
-                        "INSERT INTO students (id, name) VALUES (?, ?)",
-                        (student_id, student_name)
-                    )
-                    print(f"Database Sync: Added student {student_name} (ID: {student_id}) from dataset folder.")
-                    
-    conn.commit()
-    conn.close()
-
-def get_all_students():
-    """Returns a list of all registered students."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, name, created_at FROM students ORDER BY id ASC")
-    rows = cursor.fetchall()
-    students = [dict(row) for row in rows]
-    conn.close()
-    return students
+                s_id = int(match.group(1))
+                s_name = match.group(2).replace("_", " ")
+                students.append({
+                    "id": s_id,
+                    "name": s_name,
+                    "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                })
+    return sorted(students, key=lambda x: x["id"])
 
 def add_student(student_id, name):
-    """Adds a new student to the database. Returns True if successful, False otherwise."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("INSERT INTO students (id, name) VALUES (?, ?)", (student_id, name))
-        conn.commit()
-        # Create folder in dataset
-        folder_name = f"{student_id}_{name.replace(' ', '_')}"
-        os.makedirs(os.path.join(DATASET_DIR, folder_name), exist_ok=True)
-        return True
-    except sqlite3.IntegrityError:
-        return False
-    finally:
-        conn.close()
-
-def delete_student(student_id):
-    """Deletes a student from the database and deletes their dataset folder."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    cursor.execute("SELECT name FROM students WHERE id = ?", (student_id,))
-    row = cursor.fetchone()
-    if not row:
-        conn.close()
-        return False
-        
-    student_name = row['name']
-    
-    cursor.execute("DELETE FROM students WHERE id = ?", (student_id,))
-    conn.commit()
-    conn.close()
-    
-    folder_name = f"{student_id}_{student_name.replace(' ', '_')}"
-    folder_path = os.path.join(DATASET_DIR, folder_name)
-    if os.path.exists(folder_path):
-        import shutil
-        try:
-            shutil.rmtree(folder_path)
-            print(f"Deleted dataset folder: {folder_path}")
-        except Exception as e:
-            print(f"Error deleting folder {folder_path}: {e}")
-            
+    """Creates a new student folder to store captures."""
+    folder_name = f"{student_id}_{name.replace(' ', '_')}"
+    new_dir = os.path.join(DATASET_DIR, folder_name)
+    os.makedirs(new_dir, exist_ok=True)
     return True
 
-def mark_attendance(student_id, student_name, liveness_status="Verified"):
-    """Marks attendance for a student for the current day. Prevents duplicate marking on the same day."""
-    today = datetime.now().strftime("%Y-%m-%d")
-    current_time = datetime.now().strftime("%H:%M:%S")
-    
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    cursor.execute(
-        "SELECT id FROM attendance WHERE student_id = ? AND date = ?",
-        (student_id, today)
-    )
-    row = cursor.fetchone()
-    
-    if row:
-        conn.close()
-        return "Already Marked"
-        
-    cursor.execute(
-        "INSERT INTO attendance (student_id, student_name, date, time, liveness_status, status) VALUES (?, ?, ?, ?, ?, ?)",
-        (student_id, student_name, today, current_time, liveness_status, "Present")
-    )
-    conn.commit()
-    conn.close()
-    return "Success"
+def delete_student(student_id):
+    """Deletes a student folder."""
+    src_dataset = os.path.join(BACKEND_DIR, "dataset")
+    if os.path.exists(src_dataset):
+        for folder in os.listdir(src_dataset):
+            if folder.startswith(f"{student_id}_"):
+                import shutil
+                shutil.rmtree(os.path.join(src_dataset, folder), ignore_errors=True)
+                
+    if os.path.exists(DATASET_DIR):
+        for folder in os.listdir(DATASET_DIR):
+            if folder.startswith(f"{student_id}_"):
+                import shutil
+                shutil.rmtree(os.path.join(DATASET_DIR, folder), ignore_errors=True)
+    return True
 
 def get_attendance_records(date_filter=None, name_filter=None):
-    """Returns attendance records, optionally filtered by date or student name."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    """Fetches attendance records from the synchronized Cloud KV store (with SQLite fallback)."""
+    records = []
     
-    query = "SELECT id, student_id, student_name, date, time, liveness_status, status FROM attendance WHERE 1=1"
-    params = []
-    
+    # 1. Attempt to fetch from Cloud KV
+    try:
+        res = requests.get(KV_BUCKET + "logs", timeout=2.5)
+        if res.status_code == 200:
+            records = res.json()
+    except Exception as e:
+        print(f"Cloud KV Fetch Exception: {e}")
+        
+    # 2. Fallback to local SQLite if Cloud KV fails or is empty
+    if not records:
+        try:
+            conn = get_db_connection()
+            rows = conn.execute("SELECT * FROM attendance ORDER BY id DESC").fetchall()
+            records = [dict(r) for r in rows]
+            conn.close()
+        except Exception as e:
+            print(f"SQLite Fallback Fetch Exception: {e}")
+            
+    # Apply filtering logic
     if date_filter:
-        query += " AND date = ?"
-        params.append(date_filter)
-        
+        records = [r for r in records if r.get("date") == date_filter]
     if name_filter:
-        query += " AND student_name LIKE ?"
-        params.append(f"%{name_filter}%")
+        records = [r for r in records if name_filter.lower() in r.get("student_name", "").lower()]
         
-    query += " ORDER BY date DESC, time DESC"
-    
-    cursor.execute(query, params)
-    rows = cursor.fetchall()
-    records = [dict(row) for row in rows]
-    conn.close()
     return records
+
+def mark_attendance(student_id, student_name, liveness_status):
+    """Logs attendance to the cloud KV store (and local SQLite fallback)."""
+    now = datetime.now()
+    date_str = now.strftime("%Y-%m-%d")
+    time_str = now.strftime("%H:%M:%S")
+    status = "Present" if liveness_status == "Verified" else "Absent"
+    
+    new_record = {
+        "student_id": student_id,
+        "student_name": student_name,
+        "date": date_str,
+        "time": time_str,
+        "liveness_status": liveness_status,
+        "status": status
+    }
+    
+    # 1. Fetch current list from Cloud KV
+    records = []
+    try:
+        res = requests.get(KV_BUCKET + "logs", timeout=2.0)
+        if res.status_code == 200:
+            records = res.json()
+    except Exception:
+        pass
+        
+    # Check if already marked in cloud records
+    already_marked = False
+    for r in records:
+        if r.get("student_id") == student_id and r.get("date") == date_str and r.get("status") == "Present":
+            already_marked = True
+            break
+            
+    if already_marked and status == "Present":
+        return "Already Marked"
+        
+    # Append and upload to Cloud KV
+    records.insert(0, new_record)
+    try:
+        requests.put(KV_BUCKET + "logs", data=json.dumps(records), headers={"Content-Type": "application/json"}, timeout=2.0)
+    except Exception as e:
+        print(f"Cloud KV Upload Error: {e}")
+        
+    # 2. Write to local SQLite fallback
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Check if already marked locally
+        row = cursor.execute(
+            "SELECT id FROM attendance WHERE student_id = ? AND date = ? AND status = 'Present'",
+            (student_id, date_str)
+        ).fetchone()
+        
+        if row and status == "Present":
+            conn.close()
+            return "Already Marked"
+            
+        cursor.execute(
+            "INSERT INTO attendance (student_id, student_name, date, time, liveness_status, status) VALUES (?, ?, ?, ?, ?, ?)",
+            (student_id, student_name, date_str, time_str, liveness_status, status)
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"SQLite Fallback Write Error: {e}")
+        
+    return "Success"
