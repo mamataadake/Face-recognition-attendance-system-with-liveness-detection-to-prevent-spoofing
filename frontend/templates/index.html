@@ -209,7 +209,8 @@
                                     <i data-lucide="video-off" class="placeholder-icon"></i>
                                     <p>Camera is stopped. Click 'Start Scanner' below.</p>
                                 </div>
-                                <img src="" alt="Webcam Feed" id="webcam-feed" class="webcam-feed-img hidden">
+                                <video id="webcam-raw" autoplay playsinline class="hidden" style="width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1);"></video>
+                                <canvas id="webcam-canvas" class="webcam-feed-img hidden" width="640" height="480"></canvas>
                                 <div class="scanner-laser hidden" id="laser-line"></div>
                             </div>
                             <div class="camera-controls">
@@ -395,7 +396,8 @@
             <div class="modal-body">
                 <p class="modal-desc">Look directly into the camera and tilt your head slowly in different angles to capture all face features.</p>
                 <div class="modal-video-wrapper">
-                    <img src="" alt="Registration Camera Feed" id="registration-feed" class="registration-feed-img">
+                    <video id="registration-raw" autoplay playsinline class="hidden" style="width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1);"></video>
+                    <canvas id="registration-canvas" class="webcam-feed-img" width="640" height="480"></canvas>
                     <div class="scanning-scanner"></div>
                 </div>
                 <div class="capture-progress">

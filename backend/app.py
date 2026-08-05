@@ -2,6 +2,7 @@ import os
 import time
 import threading
 import csv
+import base64
 from datetime import datetime, timedelta
 from flask import Flask, Response, jsonify, request, render_template, send_file
 import cv2
@@ -12,11 +13,35 @@ import database as db
 from liveness import LivenessDetector
 from face_recognizer import FaceRecognizerWrapper, train_model_async, get_training_status
 
-# Configure path variables
+# Configure path variables based on serverless execution environment
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATASET_DIR = os.path.join(BASE_DIR, "dataset")
-MODEL_PATH = os.path.join(BASE_DIR, "models", "face_trainer.yml")
-ATTENDANCE_DIR = os.path.join(BASE_DIR, "attendance")
+IS_VERCEL = os.environ.get('VERCEL') is not None
+
+if IS_VERCEL:
+    DATASET_DIR = "/tmp/dataset"
+    MODEL_DIR = "/tmp/models"
+    MODEL_PATH = os.path.join(MODEL_DIR, "face_trainer.yml")
+    ATTENDANCE_DIR = "/tmp/attendance"
+else:
+    DATASET_DIR = os.path.join(BASE_DIR, "dataset")
+    MODEL_PATH = os.path.join(BASE_DIR, "models", "face_trainer.yml")
+    ATTENDANCE_DIR = os.path.join(BASE_DIR, "attendance")
+
+# Preload files if running on Vercel
+if IS_VERCEL:
+    os.makedirs(DATASET_DIR, exist_ok=True)
+    os.makedirs(MODEL_DIR, exist_ok=True)
+    os.makedirs(ATTENDANCE_DIR, exist_ok=True)
+    
+    # Copy prebuilt model from bundle to writeable /tmp/models directory
+    src_model = os.path.join(BASE_DIR, "models", "face_trainer.yml")
+    if os.path.exists(src_model) and not os.path.exists(MODEL_PATH):
+        import shutil
+        try:
+            shutil.copy2(src_model, MODEL_PATH)
+            print("Vercel App Init: Copied prebuilt model to /tmp")
+        except Exception as e:
+            print(f"Vercel App Init: Error copying model: {e}")
 
 # Initialize SQLite Database
 db.init_db()
@@ -31,67 +56,26 @@ app = Flask(
 # Initialize Face Recognizer wrapper
 recognizer_wrapper = FaceRecognizerWrapper(MODEL_PATH)
 
-# Thread-safe Camera Manager
-class CameraManager:
-    def __init__(self):
-        self.cap = None
-        self.active_stream = None  # "recognition" or "registration"
-        self.lock = threading.Lock()
+# Sessions dictionary for tracking liveness state per browser connection
+sessions = {}
+sessions_lock = threading.Lock()
 
-    def get_cap(self, stream_type):
-        with self.lock:
-            if self.cap is not None and self.active_stream != stream_type:
-                self.cap.release()
-                self.cap = None
-                time.sleep(0.5)  # Allow camera hardware reset
-            
-            if self.cap is None:
-                self.cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)  # Use DirectShow on Windows for faster startup
-                if not self.cap.isOpened():
-                    self.cap = cv2.VideoCapture(0)  # Fallback
-                self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-            
-            self.active_stream = stream_type
-            return self.cap
+def decode_base64_image(base64_str):
+    """Decodes a base64 image string into an OpenCV BGR image."""
+    if ',' in base64_str:
+        base64_str = base64_str.split(',')[1]
+    img_data = base64.b64decode(base64_str)
+    nparr = np.frombuffer(img_data, np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    return img
 
-    def release(self):
-        with self.lock:
-            if self.cap is not None:
-                self.cap.release()
-                self.cap = None
-            self.active_stream = None
-
-camera_manager = CameraManager()
-
-# Global state for active recognition stream
-recognition_state = {
-    "face_detected": False,
-    "student_id": None,
-    "name": "Unknown",
-    "confidence": 0.0,
-    "liveness_state": "BLINK",
-    "liveness_message": "Waiting for face...",
-    "blink_count": 0,
-    "blink_verified": False,
-    "movement_verified": False,
-    "time_remaining": 12.0,
-    "attendance_status": "Idle"  # "Idle", "Marked", "Already Marked"
-}
-recognition_state_lock = threading.Lock()
-
-def update_recognition_state(**kwargs):
-    with recognition_state_lock:
-        for k, v in kwargs.items():
-            recognition_state[k] = v
-
-def get_recognition_state():
-    with recognition_state_lock:
-        return recognition_state.copy()
-
-# Page Route
+# Page Routes
 @app.route('/')
 def index():
+    return render_template('index.html')
+
+@app.route('/dashboard')
+def dashboard_redirect():
     return render_template('index.html')
 
 # API Endpoints
@@ -194,7 +178,6 @@ def train_model():
 @app.route('/api/train/status', methods=['GET'])
 def train_status():
     status_info = get_training_status()
-    # Reload model on success
     if status_info["status"] == "success":
         recognizer_wrapper.reload_model()
     return jsonify(status_info)
@@ -227,7 +210,6 @@ def export_attendance():
     os.makedirs(ATTENDANCE_DIR, exist_ok=True)
     temp_csv = os.path.join(ATTENDANCE_DIR, "export_temp.csv")
     
-    # Save to CSV using python's built-in csv module to bypass pandas DLL blocks
     try:
         with open(temp_csv, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
@@ -243,329 +225,200 @@ def export_attendance():
                 ])
     except Exception as e:
         print(f"Error exporting CSV: {e}")
+            
     return send_file(temp_csv, as_attachment=True, download_name=f"attendance_report_{datetime.now().strftime('%Y%m%d')}.csv")
 
-@app.route('/api/camera/status', methods=['GET'])
-def camera_status():
-    return jsonify(get_recognition_state())
+# --- SERVERLESS-SAFE CAMERAS (PROCESS / REGISTER POST API ENDPOINTS) ---
 
-@app.route('/api/camera/stop', methods=['POST'])
-def stop_camera():
-    camera_manager.release()
-    update_recognition_state(
-        face_detected=False,
-        name="Unknown",
-        liveness_message="Camera Stopped.",
-        liveness_state="OFFLINE",
-        attendance_status="Idle"
-    )
-    return jsonify({"success": True})
-
-# --- VIDEO STREAMING GENERATORS ---
-
-def generate_recognition_frames():
-    """Generates processed video frames for real-time Face Recognition & Liveness Detection."""
-    cap = camera_manager.get_cap("recognition")
-    if not cap or not cap.isOpened():
-        print("Camera recognition: Failed to open device.")
-        return
+@app.route('/api/camera/process', methods=['POST'])
+def process_camera_frame():
+    """Receives, decodes, recognizes, and checks liveness on client-sent video frames."""
+    data = request.json
+    if not data or 'image' not in data or 'session_id' not in data:
+        return jsonify({"success": False, "message": "Missing image or session ID"}), 400
         
-    liveness_detector = None
-    tracked_student_id = None
-    tracked_student_name = "Unknown"
-    consecutive_no_face = 0
+    session_id = data['session_id']
     
-    # Cache mapping of ID to Name from DB
+    try:
+        frame = decode_base64_image(data['image'])
+        if frame is None:
+            return jsonify({"success": False, "message": "Failed to decode image"}), 400
+    except Exception as e:
+        return jsonify({"success": False, "message": f"Image error: {e}"}), 400
+        
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    
+    # Face detection
+    faces = recognizer_wrapper.face_cascade.detectMultiScale(
+        gray,
+        scaleFactor=1.2,
+        minNeighbors=5,
+        minSize=(120, 120)
+    )
+    
+    if len(faces) == 0:
+        # If face disappears, clear session liveness tracker
+        with sessions_lock:
+            if session_id in sessions:
+                del sessions[session_id]
+        return jsonify({
+            "face_detected": False,
+            "name": "Unknown",
+            "confidence": 0.0,
+            "liveness_state": "BLINK",
+            "liveness_message": "Waiting for face...",
+            "blink_count": 0,
+            "blink_verified": False,
+            "movement_verified": False,
+            "time_remaining": 12.0,
+            "attendance_status": "Idle"
+        })
+        
+    # Process largest face
+    largest_face = max(faces, key=lambda f: f[2] * f[3])
+    (x, y, w, h) = largest_face
+    face_gray = gray[y:y+h, x:x+w]
+    
+    # Run face prediction
+    predicted_id = None
+    confidence = 999.0
+    if recognizer_wrapper.recognizer is not None:
+        predicted_id, confidence = recognizer_wrapper.predict(face_gray)
+        
+    # Fetch name mapping
     students_list = db.get_all_students()
     names_mapping = {s['id']: s['name'] for s in students_list}
-
-    print("Recognition stream: Started generating frames.")
-
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
+    predicted_name = "Unknown"
+    
+    if predicted_id is not None and confidence < 60:
+        predicted_name = names_mapping.get(predicted_id, "Unknown")
+    else:
+        predicted_id = None  # Reset if confidence too weak
+        
+    # Get or create session
+    with sessions_lock:
+        if session_id not in sessions:
+            sessions[session_id] = {
+                "detector": LivenessDetector(blink_target=1, timeout=12),
+                "student_id": predicted_id,
+                "attendance_status": "Idle"
+            }
+        session_data = sessions[session_id]
+        
+        # Reset if identity changes
+        if session_data["student_id"] != predicted_id:
+            session_data["detector"] = LivenessDetector(blink_target=1, timeout=12)
+            session_data["student_id"] = predicted_id
+            session_data["attendance_status"] = "Idle"
             
-        # Flip horizontally for a mirror effect (more natural)
-        frame = cv2.flip(frame, 1)
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        
-        # Face Detection
-        faces = recognizer_wrapper.face_cascade.detectMultiScale(
-            gray,
-            scaleFactor=1.2,
-            minNeighbors=5,
-            minSize=(120, 120)
-        )
-        
-        if len(faces) == 0:
-            consecutive_no_face += 1
-            if consecutive_no_face > 15:
-                # Reset liveness checker if no face seen for 15 frames
-                liveness_detector = None
-                tracked_student_id = None
-                tracked_student_name = "Unknown"
-                update_recognition_state(
-                    face_detected=False,
-                    student_id=None,
-                    name="Unknown",
-                    confidence=0.0,
-                    liveness_state="BLINK",
-                    liveness_message="Waiting for face...",
-                    blink_count=0,
-                    blink_verified=False,
-                    movement_verified=False,
-                    time_remaining=12.0,
-                    attendance_status="Idle"
-                )
+    liveness_detector = session_data["detector"]
+    
+    # Detect eyes inside face crop
+    eyes = recognizer_wrapper.eye_cascade.detectMultiScale(
+        face_gray,
+        scaleFactor=1.1,
+        minNeighbors=6,
+        minSize=(30, 30)
+    )
+    
+    # Update liveness checklist
+    liveness_state = liveness_detector.update((x, y, w, h), eyes)
+    prog = liveness_detector.get_progress()
+    
+    # Mark attendance on verified states
+    attendance_status = session_data["attendance_status"]
+    if liveness_state == "VERIFIED":
+        if predicted_id is not None:
+            res = db.mark_attendance(predicted_id, predicted_name, "Verified")
+            if res == "Success":
+                attendance_status = "Success (Marked)"
+            elif res == "Already Marked":
+                attendance_status = "Success (Already Marked Today)"
         else:
-            consecutive_no_face = 0
-            # Process only the largest face in the frame
-            largest_face = max(faces, key=lambda f: f[2] * f[3])
-            (x, y, w, h) = largest_face
+            attendance_status = "Unknown Profile (Logs omitted)"
+    elif liveness_state == "SPOOF_SUSPECTED":
+        attendance_status = "Access Denied (Spoof Suspected)"
+        if predicted_id is not None:
+            db.mark_attendance(predicted_id, predicted_name, "SPOOF_SUSPECTED")
             
-            face_gray = gray[y:y+h, x:x+w]
-            face_color = frame[y:y+h, x:x+w]
-            
-            # Predict identity
-            predicted_id = None
-            confidence = 999.0
-            
-            if recognizer_wrapper.recognizer is not None:
-                predicted_id, confidence = recognizer_wrapper.predict(face_gray)
-                
-            # Parse student name
-            predicted_name = "Unknown"
-            if predicted_id is not None and confidence < 60:  # Threshold for LBPH (lower is better match)
-                predicted_name = names_mapping.get(predicted_id, "Unknown")
-            else:
-                predicted_id = None  # Reset if confidence too high (weak match)
-                
-            # Initialize or update liveness detector for this face
-            if liveness_detector is None or tracked_student_id != predicted_id:
-                liveness_detector = LivenessDetector(blink_target=1, timeout=12)
-                tracked_student_id = predicted_id
-                tracked_student_name = predicted_name
-                update_recognition_state(attendance_status="Idle")
-                
-            # Detect eyes inside cropped face region for blink check
-            eyes = recognizer_wrapper.eye_cascade.detectMultiScale(
-                face_gray,
-                scaleFactor=1.1,
-                minNeighbors=6,
-                minSize=(30, 30)
-            )
-            
-            # Update Liveness state-machine
-            liveness_state = liveness_detector.update((x, y, w, h), eyes)
-            prog = liveness_detector.get_progress()
-            
-            # Trigger attendance if verified and not anonymous
-            attendance_status = "Pending Verification"
-            if liveness_state == "VERIFIED":
-                if tracked_student_id is not None:
-                    res = db.mark_attendance(tracked_student_id, tracked_student_name, "Verified")
-                    if res == "Success":
-                        attendance_status = f"Success (Marked)"
-                    elif res == "Already Marked":
-                        attendance_status = f"Success (Already Marked Today)"
-                else:
-                    attendance_status = "Unknown Student (Cannot mark)"
-            elif liveness_state == "SPOOF_SUSPECTED":
-                attendance_status = "Access Denied (Spoof Flagged)"
-                if tracked_student_id is not None:
-                    # Log spoof attempts in DB
-                    db.mark_attendance(tracked_student_id, tracked_student_name, "SPOOF_SUSPECTED")
-                    
-            # Update global state for REST API
-            update_recognition_state(
-                face_detected=True,
-                student_id=tracked_student_id,
-                name=tracked_student_name,
-                confidence=confidence,
-                liveness_state=liveness_state,
-                liveness_message=prog["message"],
-                blink_count=prog["blink_count"],
-                blink_verified=prog["blink_verified"],
-                movement_verified=prog["movement_verified"],
-                time_remaining=prog["time_remaining"],
-                attendance_status=attendance_status
-            )
-            
-            # --- Draw overlays on frame ---
-            # Theme Colors: Green=Verified, Red=Spoof, Blue=Blink, Yellow=Movement
-            if liveness_state == "VERIFIED":
-                color = (46, 117, 89) # Emerald Green (BGR)
-                lbl = f"{tracked_student_name} [LIVE]"
-            elif liveness_state == "SPOOF_SUSPECTED":
-                color = (59, 59, 225) # Rose Red (BGR)
-                lbl = "SPOOF DETECTED!"
-            elif liveness_state == "MOVEMENT":
-                color = (0, 204, 255) # Bright Yellow (BGR)
-                lbl = "Please move head"
-            else:
-                color = (235, 120, 30) # Soft Blue (BGR)
-                lbl = "Blink your eyes"
-                
-            # Face Bounding Box
-            cv2.rectangle(frame, (x, y), (x+w, y+h), color, 3)
-            
-            # Header Label background
-            cv2.rectangle(frame, (x - 2, y - 35), (x + w + 2, y), color, cv2.FILLED)
-            cv2.putText(
-                frame,
-                lbl,
-                (x + 5, y - 10),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (255, 255, 255),
-                2,
-                cv2.LINE_AA
-            )
-            
-            # Draw eye bounding boxes if in Blink step to show active scanning
-            if liveness_state == "BLINK":
-                for (ex, ey, ew, eh) in eyes:
-                    cv2.rectangle(frame, (x + ex, y + ey), (x + ex + ew, y + ey + eh), (0, 255, 0), 1)
+    session_data["attendance_status"] = attendance_status
+    
+    return jsonify({
+        "face_detected": True,
+        "x": int(x), "y": int(y), "w": int(w), "h": int(h),
+        "name": predicted_name,
+        "confidence": float(confidence),
+        "liveness_state": liveness_state,
+        "liveness_message": prog["message"],
+        "blink_count": prog["blink_count"],
+        "blink_verified": prog["blink_verified"],
+        "movement_verified": prog["movement_verified"],
+        "time_remaining": prog["time_remaining"],
+        "attendance_status": attendance_status
+    })
 
-        # Encode frame as JPEG
-        ret, jpeg = cv2.imencode('.jpg', frame)
-        if not ret:
-            continue
-            
-        yield (b'--frame\r\n'
-               b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n\r\n')
+@app.route('/api/camera/register', methods=['POST'])
+def register_camera_frame():
+    """Receives registration video frame, crops face and saves it to directory."""
+    data = request.json
+    if not data or 'image' not in data or 'student_id' not in data or 'count' not in data:
+        return jsonify({"success": False, "message": "Missing arguments"}), 400
         
-        time.sleep(0.03)  # Limit output to ~30 FPS
-
-def generate_registration_frames(student_id):
-    """Generates processed video frames for face registration, capturing 40 face images."""
-    cap = camera_manager.get_cap("registration")
-    if not cap or not cap.isOpened():
-        print("Camera registration: Failed to open device.")
-        return
-        
-    # Get student name from DB to form folder name
+    student_id = int(data['student_id'])
+    count = int(data['count'])
+    
     conn = db.get_db_connection()
     row = conn.execute("SELECT name FROM students WHERE id = ?", (student_id,)).fetchone()
     conn.close()
     
     if not row:
-        print(f"Registration error: Student ID {student_id} not in database.")
-        return
+        return jsonify({"success": False, "message": "Student ID not found in database."}), 404
         
     student_name = row['name']
     folder_name = f"{student_id}_{student_name.replace(' ', '_')}"
     save_path = os.path.join(DATASET_DIR, folder_name)
     os.makedirs(save_path, exist_ok=True)
     
-    count = 0
-    last_capture_time = 0
-    capture_delay = 0.8  # Wait 800ms between captures to allow angle change
-
-    print(f"Registration stream: Starting capture for student {student_name} (ID: {student_id})")
-
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-            
-        frame = cv2.flip(frame, 1)
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    try:
+        frame = decode_base64_image(data['image'])
+        if frame is None:
+            return jsonify({"success": False, "message": "Failed to decode frame."}), 400
+    except Exception as e:
+        return jsonify({"success": False, "message": f"Image error: {e}"}), 400
         
-        # Detect faces
-        faces = recognizer_wrapper.face_cascade.detectMultiScale(
-            gray,
-            scaleFactor=1.1,
-            minNeighbors=6,
-            minSize=(120, 120)
-        )
-        
-        if len(faces) > 0 and count < 40:
-            # Take largest face
-            largest_face = max(faces, key=lambda f: f[2] * f[3])
-            (x, y, w, h) = largest_face
-            
-            current_time = time.time()
-            if current_time - last_capture_time >= capture_delay:
-                count += 1
-                last_capture_time = current_time
-                
-                # Crop grayscale face
-                face_crop = gray[y:y+h, x:x+w]
-                # Resize to standard dimension
-                face_crop = cv2.resize(face_crop, (200, 200))
-                
-                # Save image
-                img_file = os.path.join(save_path, f"{count}.jpg")
-                cv2.imwrite(img_file, face_crop)
-                
-            # Draw yellow capture bounding box
-            cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 165, 255), 2)
-            cv2.putText(
-                frame,
-                f"Capturing face... {count}/40",
-                (x, y-10),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (0, 165, 255),
-                2
-            )
-            
-        # Draw total progress HUD
-        cv2.rectangle(frame, (20, 20), (220, 60), (0, 0, 0), cv2.FILLED)
-        cv2.putText(
-            frame,
-            f"Dataset: {count}/40",
-            (30, 48),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            (0, 255, 0) if count >= 40 else (255, 255, 255),
-            2
-        )
-        
-        if count >= 40:
-            cv2.rectangle(frame, (100, 200), (540, 280), (46, 117, 89), cv2.FILLED)
-            cv2.putText(
-                frame,
-                "REGISTRATION COMPLETED!",
-                (120, 250),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.8,
-                (255, 255, 255),
-                2
-            )
-            
-        ret_val, jpeg = cv2.imencode('.jpg', frame)
-        if not ret_val:
-            continue
-            
-        yield (b'--frame\r\n'
-               b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n\r\n')
-               
-        if count >= 40:
-            # Let the user see the "REGISTRATION COMPLETED" banner for 2 seconds
-            time.sleep(2.0)
-            break
-            
-        time.sleep(0.03)
-        
-    camera_manager.release()
-
-@app.route('/api/camera/stream')
-def get_recognition_stream():
-    return Response(
-        generate_recognition_frames(),
-        mimetype='multipart/x-mixed-replace; boundary=frame'
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    
+    # Face detection
+    faces = recognizer_wrapper.face_cascade.detectMultiScale(
+        gray,
+        scaleFactor=1.1,
+        minNeighbors=6,
+        minSize=(120, 120)
     )
+    
+    if len(faces) == 0:
+        return jsonify({"success": True, "face_detected": False, "message": "No face detected in capture."})
+        
+    # Crop largest face and save
+    largest_face = max(faces, key=lambda f: f[2] * f[3])
+    (x, y, w, h) = largest_face
+    face_crop = gray[y:y+h, x:x+w]
+    face_crop = cv2.resize(face_crop, (200, 200))
+    
+    img_file = os.path.join(save_path, f"{count}.jpg")
+    cv2.imwrite(img_file, face_crop)
+    
+    return jsonify({
+        "success": True,
+        "face_detected": True,
+        "message": f"Captured image {count}/40",
+        "x": int(x), "y": int(y), "w": int(w), "h": int(h)
+    })
 
-@app.route('/api/camera/register_stream/<int:student_id>')
-def get_registration_stream(student_id):
-    return Response(
-        generate_registration_frames(student_id),
-        mimetype='multipart/x-mixed-replace; boundary=frame'
-    )
+@app.route('/api/camera/stop', methods=['POST'])
+def stop_camera():
+    # Retained for API compatibility but unused in serverless client-side mode
+    return jsonify({"success": True})
 
 if __name__ == '__main__':
-    # Run server on port 5000
     app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)

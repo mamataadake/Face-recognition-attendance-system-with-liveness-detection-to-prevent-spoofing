@@ -5,15 +5,37 @@ import re
 
 # Base directory paths
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DB_DIR = os.path.join(BASE_DIR, "attendance")
-DB_PATH = os.path.join(DB_DIR, "attendance.db")
-DATASET_DIR = os.path.join(BASE_DIR, "dataset")
+IS_VERCEL = os.environ.get('VERCEL') is not None
+
+if IS_VERCEL:
+    DB_DIR = "/tmp/attendance"
+    DB_PATH = os.path.join(DB_DIR, "attendance.db")
+    DATASET_DIR = "/tmp/dataset"
+else:
+    DB_DIR = os.path.join(BASE_DIR, "attendance")
+    DB_PATH = os.path.join(DB_DIR, "attendance.db")
+    DATASET_DIR = os.path.join(BASE_DIR, "dataset")
 
 def init_db():
     """Initializes the SQLite database and creates tables if they do not exist."""
     os.makedirs(DB_DIR, exist_ok=True)
     os.makedirs(DATASET_DIR, exist_ok=True)
     
+    # If running on Vercel, copy pre-bundled datasets to the writable /tmp folder
+    if IS_VERCEL:
+        src_dataset = os.path.join(BASE_DIR, "dataset")
+        if os.path.exists(src_dataset):
+            import shutil
+            for item in os.listdir(src_dataset):
+                s = os.path.join(src_dataset, item)
+                d = os.path.join(DATASET_DIR, item)
+                if os.path.isdir(s) and not os.path.exists(d):
+                    try:
+                        shutil.copytree(s, d)
+                        print(f"Vercel Init: Copied {item} to {d}")
+                    except Exception as e:
+                        print(f"Vercel Init: Error copying {item}: {e}")
+                        
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
@@ -64,18 +86,15 @@ def sync_dataset_to_db():
     for folder in folders:
         folder_path = os.path.join(DATASET_DIR, folder)
         if os.path.isdir(folder_path):
-            # Parse ID and Name from folder name (e.g. 1_Mamata or 1_Mamata_Adake)
             match = re.match(r"^(\d+)_(.+)$", folder)
             if match:
                 student_id = int(match.group(1))
                 student_name = match.group(2).replace("_", " ")
                 
-                # Check if student already exists in DB
                 cursor.execute("SELECT id FROM students WHERE id = ?", (student_id,))
                 row = cursor.fetchone()
                 
                 if not row:
-                    # Insert student record
                     cursor.execute(
                         "INSERT INTO students (id, name) VALUES (?, ?)",
                         (student_id, student_name)
@@ -107,7 +126,6 @@ def add_student(student_id, name):
         os.makedirs(os.path.join(DATASET_DIR, folder_name), exist_ok=True)
         return True
     except sqlite3.IntegrityError:
-        # Student ID already exists
         return False
     finally:
         conn.close()
@@ -117,7 +135,6 @@ def delete_student(student_id):
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # Get student name to find folder
     cursor.execute("SELECT name FROM students WHERE id = ?", (student_id,))
     row = cursor.fetchone()
     if not row:
@@ -126,12 +143,10 @@ def delete_student(student_id):
         
     student_name = row['name']
     
-    # Delete from DB
     cursor.execute("DELETE FROM students WHERE id = ?", (student_id,))
     conn.commit()
     conn.close()
     
-    # Delete dataset folder
     folder_name = f"{student_id}_{student_name.replace(' ', '_')}"
     folder_path = os.path.join(DATASET_DIR, folder_name)
     if os.path.exists(folder_path):
@@ -152,7 +167,6 @@ def mark_attendance(student_id, student_name, liveness_status="Verified"):
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # Check if already marked today
     cursor.execute(
         "SELECT id FROM attendance WHERE student_id = ? AND date = ?",
         (student_id, today)
@@ -163,7 +177,6 @@ def mark_attendance(student_id, student_name, liveness_status="Verified"):
         conn.close()
         return "Already Marked"
         
-    # Insert attendance record
     cursor.execute(
         "INSERT INTO attendance (student_id, student_name, date, time, liveness_status, status) VALUES (?, ?, ?, ?, ?, ?)",
         (student_id, student_name, today, current_time, liveness_status, "Present")

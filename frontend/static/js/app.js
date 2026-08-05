@@ -2,10 +2,14 @@ document.addEventListener("DOMContentLoaded", () => {
     // Initialize Lucide Icons
     lucide.createIcons();
 
+    // Unique session ID for liveness tracking
+    const sessionId = Math.random().toString(36).substring(2, 15);
+
     // --- Tab Navigation Logic ---
     const navLinks = document.querySelectorAll(".nav-link");
     const tabPanes = document.querySelectorAll(".tab-pane");
     const tabTitle = document.getElementById("tab-title");
+    let activeTab = "dashboard";
 
     navLinks.forEach(link => {
         link.addEventListener("click", (e) => {
@@ -39,8 +43,6 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         });
     });
-
-    let activeTab = "dashboard";
 
     // --- Chart.js Initialization ---
     const ctx = document.getElementById('attendanceChart').getContext('2d');
@@ -110,17 +112,22 @@ document.addEventListener("DOMContentLoaded", () => {
     loadDashboardStats();
 
 
-    // --- Student Management ---
+    // --- Student Management & Registration ---
     const registerForm = document.getElementById("register-form");
     const studentsTableBody = document.querySelector("#students-table tbody");
+    
+    // Capture Modal Elements
     const captureModal = document.getElementById("capture-modal");
     const modalStudentName = document.getElementById("modal-student-name");
-    const registrationFeed = document.getElementById("registration-feed");
+    const regVideo = document.getElementById("registration-raw");
+    const regCanvas = document.getElementById("registration-canvas");
     const captureProgressFill = document.getElementById("capture-progress-fill");
     const captureCountText = document.getElementById("capture-count-text");
     const btnCancelCapture = document.getElementById("btn-cancel-capture");
 
-    let captureInterval = null;
+    let regStream = null;
+    let regInterval = null;
+    let captureCount = 0;
 
     function fetchStudents() {
         fetch("/api/students")
@@ -174,21 +181,14 @@ document.addEventListener("DOMContentLoaded", () => {
         .then(res => res.json())
         .then(data => {
             if (data.success) {
-                // Open capture modal
+                // Open capture modal and initialize webcam
                 modalStudentName.textContent = `${sName} (ID: ${sId})`;
                 captureModal.classList.remove("hidden");
-                
-                // Set stream URL
-                registrationFeed.src = `/api/camera/register_stream/${sId}`;
-                
-                // Reset progress
+                captureCount = 0;
                 captureProgressFill.style.width = "0%";
                 captureCountText.textContent = "Captured 0 / 40 images";
-
-                // Poll student's image count to show progress
-                captureInterval = setInterval(() => {
-                    checkCaptureProgress(sId);
-                }, 1000);
+                
+                startRegistrationCamera(sId);
             } else {
                 alert(data.message);
             }
@@ -196,32 +196,89 @@ document.addEventListener("DOMContentLoaded", () => {
         .catch(err => alert("Registration failed: " + err));
     });
 
-    function checkCaptureProgress(studentId) {
-        fetch("/api/students")
-            .then(res => res.json())
-            .then(students => {
-                const s = students.find(x => x.id == studentId);
-                if (s) {
-                    const count = s.image_count;
-                    const pct = Math.min(100, (count / 40) * 100);
-                    captureProgressFill.style.width = `${pct}%`;
-                    captureCountText.textContent = `Captured ${count} / 40 images`;
-
-                    if (count >= 40) {
-                        // Done capturing
-                        closeCaptureModal();
-                        alert("Face scan completed successfully! Re-train the model to register this face.");
-                    }
-                }
+    function startRegistrationCamera(studentId) {
+        navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } })
+            .then(stream => {
+                regStream = stream;
+                regVideo.srcObject = stream;
+                regVideo.play();
+                
+                // Set capture processing interval (every 800ms to allow angle changes)
+                regInterval = setInterval(() => {
+                    captureRegistrationFrame(studentId);
+                }, 800);
             })
-            .catch(err => console.error("Error polling progress:", err));
+            .catch(err => {
+                alert("Could not access camera: " + err);
+                closeCaptureModal();
+            });
+    }
+
+    function captureRegistrationFrame(studentId) {
+        if (!regStream) return;
+        
+        const ctx = regCanvas.getContext('2d');
+        ctx.clearRect(0, 0, regCanvas.width, regCanvas.height);
+        
+        // Draw mirrored camera frame onto the canvas
+        ctx.save();
+        ctx.translate(regCanvas.width, 0);
+        ctx.scale(-1, 1);
+        ctx.drawImage(regVideo, 0, 0, regCanvas.width, regCanvas.height);
+        ctx.restore();
+        
+        // Serialize frame as compressed JPEG
+        const base64Image = regCanvas.toDataURL('image/jpeg', 0.65);
+        
+        // POST to register endpoint
+        fetch("/api/camera/register", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                image: base64Image,
+                student_id: studentId,
+                count: captureCount + 1
+            })
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (data.success && data.face_detected) {
+                // Draw yellow scanning bounding box on captured canvas face
+                let drawX = regCanvas.width - data.x - data.w;
+                ctx.strokeStyle = "#00a5ff";
+                ctx.lineWidth = 3;
+                ctx.strokeRect(drawX, data.y, data.w, data.h);
+                
+                captureCount++;
+                const pct = Math.min(100, (captureCount / 40) * 100);
+                captureProgressFill.style.width = `${pct}%`;
+                captureCountText.textContent = `Captured ${captureCount} / 40 images`;
+                
+                if (captureCount >= 40) {
+                    setTimeout(() => {
+                        closeCaptureModal();
+                        alert("Face scan completed successfully! Please rebuild the recognition model next.");
+                    }, 500);
+                }
+            } else {
+                // No face detected / background warning
+                ctx.fillStyle = "rgba(239, 68, 68, 0.7)";
+                ctx.fillRect(10, 10, regCanvas.width - 20, 30);
+                ctx.fillStyle = "#ffffff";
+                ctx.font = "bold 13px Outfit, sans-serif";
+                ctx.fillText(data.message || "Position your face in front of the lens", 20, 30);
+            }
+        })
+        .catch(err => console.error("Registration frame POST error:", err));
     }
 
     function closeCaptureModal() {
-        clearInterval(captureInterval);
+        if (regInterval) clearInterval(regInterval);
+        if (regStream) {
+            regStream.getTracks().forEach(track => track.stop());
+            regStream = null;
+        }
         captureModal.classList.add("hidden");
-        registrationFeed.removeAttribute("src"); // Stops stream on backend
-        fetch("/api/camera/stop", { method: "POST" });
         registerForm.reset();
         fetchStudents();
     }
@@ -261,7 +318,7 @@ document.addEventListener("DOMContentLoaded", () => {
         trainingDetailsCard.classList.add("hidden");
         trainingIconBox.className = "brain-icon-wrapper training";
         trainTitle.textContent = "Model Training Running...";
-        trainDesc.textContent = "Compiling image pixels and running LBPH trainer. Please do not close the server.";
+        trainDesc.textContent = "Compiling image pixels and running LBPH trainer. Please do not close the window.";
 
         fetch("/api/train", { method: "POST" })
             .then(res => res.json())
@@ -296,7 +353,6 @@ document.addEventListener("DOMContentLoaded", () => {
                     trainingIconBox.style.color = "#10b981";
                     trainingIconBox.style.borderColor = "rgba(16, 185, 129, 0.3)";
                     
-                    // Display details
                     renderTrainingDetails(data.details);
                     btnTrainModel.disabled = false;
                     trainProgressContainer.classList.add("hidden");
@@ -353,11 +409,15 @@ document.addEventListener("DOMContentLoaded", () => {
     // --- Live Scanner (Webcam Recognition) Section ---
     const btnStartRec = document.getElementById("btn-start-recognition");
     const btnStopRec = document.getElementById("btn-stop-recognition");
-    const webcamFeed = document.getElementById("webcam-feed");
+    
+    // Live Webcam Elements
+    const webVideo = document.getElementById("webcam-raw");
+    const webCanvas = document.getElementById("webcam-canvas");
     const videoPlaceholder = document.getElementById("video-placeholder");
     const camPill = document.getElementById("cam-pill");
     const laserLine = document.getElementById("laser-line");
 
+    // Checklist Elements
     const stepBlink = document.getElementById("step-blink");
     const blinkSubtext = document.getElementById("blink-subtext");
     const stepMovement = document.getElementById("step-movement");
@@ -371,48 +431,215 @@ document.addEventListener("DOMContentLoaded", () => {
     const attIcon = document.getElementById("att-icon");
     const attStatusCard = document.getElementById("att-status-card");
 
-    let recognitionInterval = null;
+    let webcamStream = null;
+    let webcamInterval = null;
 
     btnStartRec.addEventListener("click", () => {
-        // Toggle buttons
         btnStartRec.disabled = true;
         btnStopRec.disabled = false;
 
         // Start Stream
-        webcamFeed.src = "/api/camera/stream";
-        webcamFeed.classList.remove("hidden");
+        webCanvas.classList.remove("hidden");
         videoPlaceholder.classList.add("hidden");
         laserLine.classList.remove("hidden");
 
-        // Set status pill
         camPill.className = "camera-status-pill online";
         camPill.textContent = "Scanning";
 
-        // Poll recognition status
-        recognitionInterval = setInterval(pollRecognitionStatus, 500);
+        startWebcamScanner();
     });
 
     btnStopRec.addEventListener("click", () => {
         stopRecognitionScanner();
     });
 
+    function startWebcamScanner() {
+        navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } })
+            .then(stream => {
+                webcamStream = stream;
+                webVideo.srcObject = stream;
+                webVideo.play();
+                
+                // Process frame every 300ms
+                webcamInterval = setInterval(processWebcamFrame, 300);
+            })
+            .catch(err => {
+                alert("Could not access camera: " + err);
+                stopRecognitionScanner();
+            });
+    }
+
+    function processWebcamFrame() {
+        if (!webcamStream) return;
+        
+        const ctx = webCanvas.getContext('2d');
+        ctx.clearRect(0, 0, webCanvas.width, webCanvas.height);
+        
+        // Draw mirrored camera frame onto the canvas
+        ctx.save();
+        ctx.translate(webCanvas.width, 0);
+        ctx.scale(-1, 1);
+        ctx.drawImage(webVideo, 0, 0, webCanvas.width, webCanvas.height);
+        ctx.restore();
+        
+        // Serialize frame as compressed JPEG
+        const base64Image = webCanvas.toDataURL('image/jpeg', 0.6);
+        
+        // POST to process endpoint
+        fetch("/api/camera/process", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                image: base64Image,
+                session_id: sessionId
+            })
+        })
+        .then(res => res.json())
+        .then(data => {
+            updateVerificationUI(data);
+        })
+        .catch(err => console.error("Process frame POST error:", err));
+    }
+
+    function updateVerificationUI(data) {
+        const ctx = webCanvas.getContext('2d');
+        
+        // Redraw mirrored video to clear previous drawings
+        ctx.save();
+        ctx.translate(webCanvas.width, 0);
+        ctx.scale(-1, 1);
+        ctx.drawImage(webVideo, 0, 0, webCanvas.width, webCanvas.height);
+        ctx.restore();
+
+        if (!data.face_detected) {
+            resetVerificationUI();
+            return;
+        }
+
+        // 1. Draw Bounding Box and label on canvas
+        let color = "#3b82f6"; // Soft Blue
+        let labelText = data.name;
+        
+        if (data.liveness_state === "VERIFIED") {
+            color = "#10b981"; // Emerald Green
+            labelText += " [LIVE]";
+        } else if (data.liveness_state === "SPOOF_SUSPECTED") {
+            color = "#ef4444"; // Rose Red
+            labelText = "SPOOF DETECTED!";
+        } else if (data.liveness_state === "MOVEMENT") {
+            color = "#f59e0b"; // Yellow
+            labelText = "Please move head";
+        } else {
+            labelText = "Blink your eyes";
+        }
+        
+        // Mirror coordinates for draw
+        let drawX = webCanvas.width - data.x - data.w;
+        
+        // Box
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 3;
+        ctx.strokeRect(drawX, data.y, data.w, data.h);
+        
+        // Banner background
+        ctx.fillStyle = color;
+        ctx.fillRect(drawX - 1, data.y - 25, data.w + 2, 25);
+        
+        // Banner text
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "bold 13px Outfit, sans-serif";
+        ctx.fillText(labelText, drawX + 6, data.y - 8);
+
+        // 2. Update Match Card
+        matchName.textContent = data.name;
+        if (data.name !== "Unknown") {
+            const accuracy = Math.max(0, 100 - data.confidence);
+            matchConfidence.textContent = `${accuracy.toFixed(1)}%`;
+        } else {
+            matchConfidence.textContent = "N/A";
+        }
+
+        // 3. Update Steps checklist UI
+        // Step 1: Blink
+        if (data.blink_verified) {
+            stepBlink.className = "ver-step verified";
+            blinkSubtext.textContent = "Check completed.";
+            stepBlink.querySelector(".step-status").innerHTML = `<i data-lucide="check-circle" style="color: var(--success)"></i>`;
+        } else if (data.liveness_state === "BLINK") {
+            stepBlink.className = "ver-step active";
+            blinkSubtext.textContent = `Blinks: ${data.blink_count}/1`;
+            stepBlink.querySelector(".step-status").innerHTML = `<i data-lucide="circle-dashed" class="status-spinner spinner"></i>`;
+        } else {
+            stepBlink.className = "ver-step";
+            blinkSubtext.textContent = "Blink required.";
+            stepBlink.querySelector(".step-status").innerHTML = `<i data-lucide="minus-circle"></i>`;
+        }
+
+        // Step 2: Movement
+        if (data.movement_verified) {
+            stepMovement.className = "ver-step verified";
+            movementSubtext.textContent = "Check completed.";
+            stepMovement.querySelector(".step-status").innerHTML = `<i data-lucide="check-circle" style="color: var(--success)"></i>`;
+        } else if (data.liveness_state === "MOVEMENT") {
+            stepMovement.className = "ver-step active";
+            movementSubtext.textContent = "Awaiting head coordinate shifts...";
+            stepMovement.querySelector(".step-status").innerHTML = `<i data-lucide="circle-dashed" class="status-spinner spinner"></i>`;
+        } else {
+            stepMovement.className = "ver-step";
+            movementSubtext.textContent = "Awaiting blink step.";
+            stepMovement.querySelector(".step-status").innerHTML = `<i data-lucide="minus-circle"></i>`;
+        }
+
+        // 4. Update Verdict Card
+        verdictStatus.textContent = data.liveness_state;
+        livenessInstruction.textContent = data.liveness_message;
+
+        if (data.liveness_state === "VERIFIED") {
+            verdictStatus.className = "verified";
+        } else if (data.liveness_state === "SPOOF_SUSPECTED") {
+            verdictStatus.className = "spoof";
+        } else {
+            verdictStatus.className = "pending";
+        }
+
+        // 5. Update Attendance Status Card
+        attendanceLogStatus.textContent = data.attendance_status;
+        if (data.attendance_status.startsWith("Success")) {
+            attIcon.className = "att-info-icon marked";
+            attIcon.setAttribute("data-lucide", "check-circle");
+            attStatusCard.style.border = "1px solid var(--success)";
+        } else if (data.attendance_status.includes("Denied")) {
+            attIcon.className = "att-info-icon";
+            attIcon.setAttribute("data-lucide", "shield-alert");
+            attIcon.style.color = "var(--danger)";
+            attStatusCard.style.border = "1px solid var(--danger)";
+        } else {
+            attIcon.className = "att-info-icon";
+            attIcon.setAttribute("data-lucide", "info");
+            attStatusCard.style.border = "1px solid var(--border-color)";
+        }
+        
+        lucide.createIcons();
+    }
+
     function stopRecognitionScanner() {
-        clearInterval(recognitionInterval);
+        if (webcamInterval) clearInterval(webcamInterval);
+        
+        if (webcamStream) {
+            webcamStream.getTracks().forEach(track => track.stop());
+            webcamStream = null;
+        }
         
         btnStartRec.disabled = false;
         btnStopRec.disabled = true;
 
-        webcamFeed.classList.add("hidden");
-        webcamFeed.removeAttribute("src");
+        webCanvas.classList.add("hidden");
         videoPlaceholder.classList.remove("hidden");
         laserLine.classList.add("hidden");
 
         camPill.className = "camera-status-pill offline";
         camPill.textContent = "Offline";
 
-        // Release camera device on backend
-        fetch("/api/camera/stop", { method: "POST" });
-        
         resetVerificationUI();
     }
 
@@ -437,89 +664,6 @@ document.addEventListener("DOMContentLoaded", () => {
         attIcon.setAttribute("data-lucide", "info");
         attStatusCard.style.border = "1px solid var(--border-color)";
         lucide.createIcons();
-    }
-
-    function pollRecognitionStatus() {
-        fetch("/api/camera/status")
-            .then(res => res.json())
-            .then(data => {
-                if (!data.face_detected) {
-                    resetVerificationUI();
-                    return;
-                }
-
-                // 1. Update Match Card
-                matchName.textContent = data.name;
-                if (data.name !== "Unknown") {
-                    const accuracy = Math.max(0, 100 - data.confidence);
-                    matchConfidence.textContent = `${accuracy.toFixed(1)}%`;
-                } else {
-                    matchConfidence.textContent = "N/A";
-                }
-
-                // 2. Update Steps UI
-                // Step 1: Blink
-                if (data.blink_verified) {
-                    stepBlink.className = "ver-step verified";
-                    blinkSubtext.textContent = "Check completed.";
-                    stepBlink.querySelector(".step-status").innerHTML = `<i data-lucide="check-circle" style="color: var(--success)"></i>`;
-                } else if (data.liveness_state === "BLINK") {
-                    stepBlink.className = "ver-step active";
-                    blinkSubtext.textContent = `Blinks: ${data.blink_count}/1`;
-                    stepBlink.querySelector(".step-status").innerHTML = `<i data-lucide="circle-dashed" class="status-spinner spinner"></i>`;
-                } else {
-                    stepBlink.className = "ver-step";
-                    blinkSubtext.textContent = "Blink required.";
-                    stepBlink.querySelector(".step-status").innerHTML = `<i data-lucide="minus-circle"></i>`;
-                }
-
-                // Step 2: Movement
-                if (data.movement_verified) {
-                    stepMovement.className = "ver-step verified";
-                    movementSubtext.textContent = "Check completed.";
-                    stepMovement.querySelector(".step-status").innerHTML = `<i data-lucide="check-circle" style="color: var(--success)"></i>`;
-                } else if (data.liveness_state === "MOVEMENT") {
-                    stepMovement.className = "ver-step active";
-                    movementSubtext.textContent = "Awaiting head coordinate shifts...";
-                    stepMovement.querySelector(".step-status").innerHTML = `<i data-lucide="circle-dashed" class="status-spinner spinner"></i>`;
-                } else {
-                    stepMovement.className = "ver-step";
-                    movementSubtext.textContent = "Awaiting blink step.";
-                    stepMovement.querySelector(".step-status").innerHTML = `<i data-lucide="minus-circle"></i>`;
-                }
-
-                // 3. Update Verdict Card
-                verdictStatus.textContent = data.liveness_state;
-                livenessInstruction.textContent = data.liveness_message;
-
-                if (data.liveness_state === "VERIFIED") {
-                    verdictStatus.className = "verified";
-                } else if (data.liveness_state === "SPOOF_SUSPECTED") {
-                    verdictStatus.className = "spoof";
-                } else {
-                    verdictStatus.className = "pending";
-                }
-
-                // 4. Update Attendance Status Card
-                attendanceLogStatus.textContent = data.attendance_status;
-                if (data.attendance_status.startsWith("Success")) {
-                    attIcon.className = "att-info-icon marked";
-                    attIcon.setAttribute("data-lucide", "check-circle");
-                    attStatusCard.style.border = "1px solid var(--success)";
-                } else if (data.attendance_status.includes("Denied")) {
-                    attIcon.className = "att-info-icon";
-                    attIcon.setAttribute("data-lucide", "shield-alert");
-                    attIcon.style.color = "var(--danger)";
-                    attStatusCard.style.border = "1px solid var(--danger)";
-                } else {
-                    attIcon.className = "att-info-icon";
-                    attIcon.setAttribute("data-lucide", "info");
-                    attStatusCard.style.border = "1px solid var(--border-color)";
-                }
-                
-                lucide.createIcons();
-            })
-            .catch(err => console.error("Error polling recognition status:", err));
     }
 
 
