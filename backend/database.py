@@ -20,7 +20,7 @@ else:
     DATASET_DIR = os.path.join(BACKEND_DIR, "dataset")
 
 # Anonymous Cloud KV Database Endpoint for serverless synchronization
-KV_BUCKET = "https://kvdb.io/MamataAttendanceSystemV2/"
+KV_BUCKET = "https://kvdb.io/e05b5fa1-1b07-4e9f-863a-23d9b4b0e8c1/"
 
 def init_db():
     """Initializes the SQLite database and creates tables if they do not exist."""
@@ -77,19 +77,24 @@ def get_db_connection():
     return conn
 
 def get_all_students():
-    """Resolves student list from Cloud KV (with folder structure fallback)."""
+    """Resolves student list from Cloud KV with initialization checking."""
     students = []
+    initialized = False
     
     # 1. Try to load from Cloud KV
     try:
-        res = requests.get(KV_BUCKET + "students", timeout=2.0)
+        res_init = requests.get(KV_BUCKET + "students_initialized", timeout=1.5)
+        if res_init.status_code == 200 and res_init.text.strip() == "true":
+            initialized = True
+            
+        res = requests.get(KV_BUCKET + "students", timeout=1.5)
         if res.status_code == 200:
             students = res.json()
     except Exception as e:
         print(f"Cloud KV Students Fetch Exception: {e}")
         
-    # 2. Fallback to folder structure if Cloud KV is empty or fails
-    if not students:
+    # 2. First-boot Fallback to folders ONLY if not initialized
+    if not initialized and not students:
         src_dataset = os.path.join(BACKEND_DIR, "dataset")
         if os.path.exists(src_dataset):
             for folder in os.listdir(src_dataset):
@@ -102,11 +107,18 @@ def get_all_students():
                         "name": s_name,
                         "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     })
+            
+            # Save the initial sync to the Cloud KV and set the lock
+            try:
+                requests.put(KV_BUCKET + "students_initialized", data="true", timeout=1.5)
+                requests.put(KV_BUCKET + "students", data=json.dumps(students), headers={"Content-Type": "application/json"}, timeout=1.5)
+            except Exception:
+                pass
                     
     return sorted(students, key=lambda x: int(x["id"]))
 
 def get_student_name(student_id):
-    """Looks up a student's name by ID (Cloud KV + folder lookup)."""
+    """Looks up a student's name by ID."""
     students = get_all_students()
     for s in students:
         if int(s["id"]) == int(student_id):
@@ -114,14 +126,20 @@ def get_student_name(student_id):
     return None
 
 def add_student(student_id, name):
-    """Creates a new student folder and registers them in Cloud KV."""
-    # 1. Update Cloud KV students list
+    """Registers a new student in SQLite, Cloud KV, and directories."""
+    # 1. Update SQLite
+    try:
+        conn = get_db_connection()
+        conn.execute("INSERT OR REPLACE INTO students (id, name) VALUES (?, ?)", (student_id, name))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"SQLite add_student error: {e}")
+
+    # 2. Update Cloud KV
     students = get_all_students()
-    # Check if ID already exists
-    for s in students:
-        if int(s["id"]) == int(student_id):
-            return False
-            
+    # Filter out any duplicate ID if it exists
+    students = [s for s in students if int(s["id"]) != int(student_id)]
     students.append({
         "id": int(student_id),
         "name": name,
@@ -129,19 +147,29 @@ def add_student(student_id, name):
     })
     
     try:
+        requests.put(KV_BUCKET + "students_initialized", data="true", timeout=1.5)
         requests.put(KV_BUCKET + "students", data=json.dumps(students), headers={"Content-Type": "application/json"}, timeout=2.0)
     except Exception as e:
         print(f"Cloud KV add_student error: {e}")
         
-    # 2. Create the directory local to the current instance
+    # 3. Create the directory
     folder_name = f"{student_id}_{name.replace(' ', '_')}"
     new_dir = os.path.join(DATASET_DIR, folder_name)
     os.makedirs(new_dir, exist_ok=True)
     return True
 
 def delete_student(student_id):
-    """Deletes a student folder and removes them from Cloud KV."""
-    # 1. Update Cloud KV students list
+    """Deletes a student record from SQLite, Cloud KV, and deletes their face images."""
+    # 1. Delete from local SQLite
+    try:
+        conn = get_db_connection()
+        conn.execute("DELETE FROM students WHERE id = ?", (student_id,))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"SQLite delete_student error: {e}")
+
+    # 2. Remove from Cloud KV list
     students = get_all_students()
     students = [s for s in students if int(s["id"]) != int(student_id)]
     try:
@@ -149,7 +177,7 @@ def delete_student(student_id):
     except Exception as e:
         print(f"Cloud KV delete_student error: {e}")
 
-    # 2. Clean directories
+    # 3. Clean directories
     src_dataset = os.path.join(BACKEND_DIR, "dataset")
     if os.path.exists(src_dataset):
         for folder in os.listdir(src_dataset):

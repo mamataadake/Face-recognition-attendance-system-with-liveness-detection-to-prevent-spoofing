@@ -280,7 +280,7 @@ else:
             gray,
             scaleFactor=1.2,
             minNeighbors=5,
-            minSize=(120, 120)
+            minSize=(80, 80)
         )
         
         if len(faces) == 0:
@@ -317,7 +317,7 @@ else:
         
         if predicted_id is not None:
             closest_name = names_mapping.get(predicted_id, "Unknown")
-            if confidence < 100:
+            if confidence < 115:
                 predicted_name = closest_name
             else:
                 predicted_id = None
