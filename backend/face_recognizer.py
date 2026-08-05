@@ -98,8 +98,8 @@ class FaceRecognizerWrapper:
             return None, None
             
         try:
-            # Preprocess the face crop (Resize to 90x90 for fast calculation and localized contrast equalization)
-            face_resized = cv2.resize(face_gray, (90, 90))
+            # Preprocess the face crop (Resize to 120x120 for calculation and localized contrast equalization)
+            face_resized = cv2.resize(face_gray, (120, 120))
             clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
             face_equalized = clahe.apply(face_resized)
             
@@ -165,8 +165,8 @@ def _run_training_async(dataset_path, model_path):
                         if img_numpy is None:
                             continue
                         
-                        # Downsample to 90x90 to optimize speed and localized contrast equalize
-                        img_resized = cv2.resize(img_numpy, (90, 90))
+                        # Resize to 120x120 and localized contrast equalize
+                        img_resized = cv2.resize(img_numpy, (120, 120))
                         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
                         img_equalized = clahe.apply(img_resized)
                         
