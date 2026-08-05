@@ -26,8 +26,22 @@ def init_db():
     """Initializes the SQLite database and creates tables if they do not exist."""
     os.makedirs(DB_DIR, exist_ok=True)
     
-    # Pre-create the directory for datasets on local machine
-    if not IS_VERCEL:
+    # If running on Vercel, copy pre-bundled datasets to the writable /tmp folder
+    if IS_VERCEL:
+        os.makedirs(DATASET_DIR, exist_ok=True)
+        src_dataset = os.path.join(BACKEND_DIR, "dataset")
+        if os.path.exists(src_dataset):
+            import shutil
+            for item in os.listdir(src_dataset):
+                s = os.path.join(src_dataset, item)
+                d = os.path.join(DATASET_DIR, item)
+                if os.path.isdir(s) and not os.path.exists(d):
+                    try:
+                        shutil.copytree(s, d)
+                        print(f"Vercel Init: Copied {item} to {d}")
+                    except Exception as e:
+                        print(f"Vercel Init: Error copying {item}: {e}")
+    else:
         os.makedirs(DATASET_DIR, exist_ok=True)
         
     conn = sqlite3.connect(DB_PATH)
