@@ -13,6 +13,22 @@ training_status = {
     "details": {}
 }
 
+# Configure paths based on serverless execution environment
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+IS_VERCEL = os.environ.get('VERCEL') is not None
+
+if IS_VERCEL:
+    DATASET_DIR = "/tmp/dataset"
+    MODEL_PATH = "/tmp/models/face_trainer.yml"
+else:
+    DATASET_DIR = os.path.join(BASE_DIR, "dataset")
+    MODEL_PATH = os.path.join(BASE_DIR, "models", "face_trainer.yml")
+
+# Local cascades path (guaranteed to be bundled on Vercel)
+CASCADES_DIR = os.path.join(BASE_DIR, "backend", "cascades")
+FACE_CASCADE_PATH = os.path.join(CASCADES_DIR, "haarcascade_frontalface_default.xml")
+EYE_CASCADE_PATH = os.path.join(CASCADES_DIR, "haarcascade_eye.xml")
+
 def get_training_status():
     """Returns the current background model training status."""
     with training_lock:
@@ -32,12 +48,16 @@ class FaceRecognizerWrapper:
     def __init__(self, model_path):
         self.model_path = model_path
         self.recognizer = None
-        self.face_cascade = cv2.CascadeClassifier(
-            cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-        )
-        self.eye_cascade = cv2.CascadeClassifier(
-            cv2.data.haarcascades + "haarcascade_eye.xml"
-        )
+        
+        # Load cascades from bundled cascades folder
+        self.face_cascade = cv2.CascadeClassifier(FACE_CASCADE_PATH)
+        self.eye_cascade = cv2.CascadeClassifier(EYE_CASCADE_PATH)
+        
+        if self.face_cascade.empty():
+            print(f"Face Recognizer Error: Failed to load face cascade from {FACE_CASCADE_PATH}")
+        if self.eye_cascade.empty():
+            print(f"Face Recognizer Error: Failed to load eye cascade from {EYE_CASCADE_PATH}")
+            
         self.reload_model()
 
     def reload_model(self):
