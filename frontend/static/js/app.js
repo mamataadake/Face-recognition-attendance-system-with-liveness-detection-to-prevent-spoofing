@@ -521,6 +521,8 @@ document.addEventListener("DOMContentLoaded", () => {
         let labelText = data.name;
         if (data.name !== "Unknown") {
             labelText += ` (${Math.max(0, 100 - data.confidence).toFixed(0)}%)`;
+        } else if (data.closest_name && data.closest_name !== "Unknown") {
+            labelText = `Unknown (${data.closest_name}? ${Math.max(0, 100 - data.confidence).toFixed(0)}%)`;
         }
         
         if (data.liveness_state === "VERIFIED") {

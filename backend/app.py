@@ -312,11 +312,14 @@ else:
         students_list = db.get_all_students()
         names_mapping = {s['id']: s['name'] for s in students_list}
         predicted_name = "Unknown"
+        closest_name = "Unknown"
         
-        if predicted_id is not None and confidence < 88:
-            predicted_name = names_mapping.get(predicted_id, "Unknown")
-        else:
-            predicted_id = None
+        if predicted_id is not None:
+            closest_name = names_mapping.get(predicted_id, "Unknown")
+            if confidence < 88:
+                predicted_name = closest_name
+            else:
+                predicted_id = None
             
         with sessions_lock:
             if session_id not in sessions:
@@ -365,6 +368,7 @@ else:
             "face_detected": True,
             "x": int(x), "y": int(y), "w": int(w), "h": int(h),
             "name": predicted_name,
+            "closest_name": closest_name,
             "confidence": float(confidence),
             "liveness_state": liveness_state,
             "liveness_message": prog["message"],
