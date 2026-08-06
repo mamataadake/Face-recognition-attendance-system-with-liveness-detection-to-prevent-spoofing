@@ -21,8 +21,8 @@ if IS_VERCEL:
     DATASET_DIR = "/tmp/dataset"
     MODEL_PATH = "/tmp/models/face_trainer.yml"
 else:
-    DATASET_DIR = os.path.join(BACKEND_DIR, "dataset")
-    MODEL_PATH = os.path.join(BACKEND_DIR, "models", "face_trainer.yml")
+    DATASET_DIR = os.path.join(BASE_DIR, "dataset")
+    MODEL_PATH = os.path.join(BASE_DIR, "models", "face_trainer.yml")
 
 # Local cascades path (guaranteed to be bundled on Vercel)
 CASCADES_DIR = os.path.join(BACKEND_DIR, "cascades")
@@ -65,7 +65,7 @@ class FaceRecognizerWrapper:
         """Loads or reloads the LBPH recognizer model from disk."""
         if os.path.exists(self.model_path):
             try:
-                self.recognizer = cv2.face.LBPHFaceRecognizer_create(radius=1, neighbors=8, grid_x=9, grid_y=9)
+                self.recognizer = cv2.face.LBPHFaceRecognizer_create(radius=1, neighbors=8, grid_x=8, grid_y=8)
                 self.recognizer.read(self.model_path)
                 self.last_loaded_mtime = os.path.getmtime(self.model_path)
                 print(f"Face Recognizer: Successfully loaded model from {self.model_path} (mtime: {self.last_loaded_mtime})")
@@ -98,13 +98,12 @@ class FaceRecognizerWrapper:
             return None, None
             
         try:
-            # Preprocess the face crop (Resize to 120x120 for calculation and localized contrast equalization)
+            # Preprocess the face crop: resize to 120x120 and normalize contrast
             face_resized = cv2.resize(face_gray, (120, 120))
-            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-            face_equalized = clahe.apply(face_resized)
+            face_equalized = cv2.equalizeHist(face_resized)
             
-            student_id, confidence = self.recognizer.predict(face_equalized)
-            return student_id, confidence
+            # Predict face ID and return the distance score
+            return self.recognizer.predict(face_equalized)
         except Exception as e:
             print(f"Error during prediction: {e}")
             return None, None
@@ -165,10 +164,9 @@ def _run_training_async(dataset_path, model_path):
                         if img_numpy is None:
                             continue
                         
-                        # Resize to 120x120 and localized contrast equalize
+                        # Resize to 120x120 (dataset images are already face crops) and equalize contrast
                         img_resized = cv2.resize(img_numpy, (120, 120))
-                        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-                        img_equalized = clahe.apply(img_resized)
+                        img_equalized = cv2.equalizeHist(img_resized)
                         
                         faces.append(img_equalized)
                         ids.append(student_id)
@@ -188,7 +186,7 @@ def _run_training_async(dataset_path, model_path):
 
         set_training_status("training", 85, "Training the LBPH Face Recognizer model...")
         
-        recognizer = cv2.face.LBPHFaceRecognizer_create(radius=1, neighbors=8, grid_x=9, grid_y=9)
+        recognizer = cv2.face.LBPHFaceRecognizer_create(radius=1, neighbors=8, grid_x=8, grid_y=8)
         recognizer.train(faces, np.array(ids))
         
         set_training_status("training", 95, "Saving trained model to disk...")

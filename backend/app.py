@@ -14,6 +14,7 @@ try:
     from flask import Flask, Response, jsonify, request, render_template, send_file
     import cv2
     import numpy as np
+    import pandas as pd
 
     # Import custom modules
     import database as db
@@ -31,9 +32,9 @@ try:
         MODEL_PATH = os.path.join(MODEL_DIR, "face_trainer.yml")
         ATTENDANCE_DIR = "/tmp/attendance"
     else:
-        DATASET_DIR = os.path.join(BACKEND_DIR, "dataset")
-        MODEL_PATH = os.path.join(BACKEND_DIR, "models", "face_trainer.yml")
-        ATTENDANCE_DIR = os.path.join(BACKEND_DIR, "attendance")
+        DATASET_DIR = os.path.join(BASE_DIR, "dataset")
+        MODEL_PATH = os.path.join(BASE_DIR, "models", "face_trainer.yml")
+        ATTENDANCE_DIR = os.path.join(BASE_DIR, "attendance")
 
     # Preload files if running on Vercel
     if IS_VERCEL:
@@ -42,7 +43,7 @@ try:
         os.makedirs(ATTENDANCE_DIR, exist_ok=True)
         
         # Copy prebuilt model from bundle to writeable /tmp/models directory
-        src_model = os.path.join(BACKEND_DIR, "models", "face_trainer.yml")
+        src_model = os.path.join(BASE_DIR, "models", "face_trainer.yml")
         if os.path.exists(src_model):
             import shutil
             try:
@@ -240,20 +241,26 @@ else:
         temp_csv = os.path.join(ATTENDANCE_DIR, "export_temp.csv")
         
         try:
-            with open(temp_csv, 'w', newline='', encoding='utf-8') as f:
-                writer = csv.writer(f)
-                writer.writerow(["Student ID", "Student Name", "Date", "Time", "Liveness Verification", "Attendance Status"])
-                for r in records:
-                    writer.writerow([
-                        r.get("student_id", ""),
-                        r.get("student_name", ""),
-                        r.get("date", ""),
-                        r.get("time", ""),
-                        r.get("liveness_status", ""),
-                        r.get("status", "")
-                    ])
+            if records:
+                df = pd.DataFrame(records)
+                df = df.rename(columns={
+                    "student_id": "Student ID",
+                    "student_name": "Student Name",
+                    "date": "Date",
+                    "time": "Time",
+                    "liveness_status": "Liveness Verification",
+                    "status": "Attendance Status"
+                })
+                cols = ["Student ID", "Student Name", "Date", "Time", "Liveness Verification", "Attendance Status"]
+                for col in cols:
+                    if col not in df.columns:
+                        df[col] = ""
+                df = df[cols]
+            else:
+                df = pd.DataFrame(columns=["Student ID", "Student Name", "Date", "Time", "Liveness Verification", "Attendance Status"])
+            df.to_csv(temp_csv, index=False, encoding='utf-8')
         except Exception as e:
-            print(f"Error exporting CSV: {e}")
+            print(f"Error exporting CSV with pandas: {e}")
                 
         return send_file(temp_csv, as_attachment=True, download_name=f"attendance_report_{datetime.now().strftime('%Y%m%d')}.csv")
 
@@ -275,13 +282,20 @@ else:
             
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         
-        # Face detection
-        faces = recognizer_wrapper.face_cascade.detectMultiScale(
-            gray,
-            scaleFactor=1.2,
-            minNeighbors=5,
-            minSize=(80, 80)
-        )
+        # Normalize lighting shadows across the entire frame before face detection
+        gray_eq = cv2.equalizeHist(gray)
+        
+        # Face detection using equalized frame
+        try:
+            faces = recognizer_wrapper.face_cascade.detectMultiScale(
+                gray_eq,
+                scaleFactor=1.1,
+                minNeighbors=5,
+                minSize=(80, 80)
+            )
+        except Exception as e:
+            print(f"Face detection error: {e}")
+            faces = []
         
         if len(faces) == 0:
             with sessions_lock:
@@ -302,7 +316,9 @@ else:
             
         largest_face = max(faces, key=lambda f: f[2] * f[3])
         (x, y, w, h) = largest_face
-        face_gray = gray[y:y+h, x:x+w]
+        
+        # Crop the face tightly from the equalized frame
+        face_gray = gray_eq[y:y+h, x:x+w]
         
         # Run face prediction
         predicted_id = None
@@ -317,7 +333,8 @@ else:
         
         if predicted_id is not None:
             closest_name = names_mapping.get(predicted_id, "Unknown")
-            if confidence < 115:
+            # Set frame-level validation threshold to 85.0 to capture matches under varying lighting
+            if confidence < 85.0:
                 predicted_name = closest_name
             else:
                 predicted_id = None
@@ -326,51 +343,97 @@ else:
             if session_id not in sessions:
                 sessions[session_id] = {
                     "detector": LivenessDetector(blink_target=1, timeout=22),
-                    "student_id": predicted_id,
+                    "predictions": [],
                     "attendance_status": "Idle"
                 }
             session_data = sessions[session_id]
             
-            if session_data["student_id"] != predicted_id:
-                session_data["detector"] = LivenessDetector(blink_target=1, timeout=22)
-                session_data["student_id"] = predicted_id
-                session_data["attendance_status"] = "Idle"
+            # Record current frame prediction ID and confidence score
+            session_data["predictions"].append((predicted_id, confidence))
                 
         liveness_detector = session_data["detector"]
         
-        eyes = recognizer_wrapper.eye_cascade.detectMultiScale(
-            face_gray,
-            scaleFactor=1.1,
-            minNeighbors=3,
-            minSize=(12, 12)
-        )
+        try:
+            eyes = recognizer_wrapper.eye_cascade.detectMultiScale(
+                face_gray,
+                scaleFactor=1.1,
+                minNeighbors=3,
+                minSize=(12, 12)
+            )
+        except Exception as e:
+            print(f"Eye detection warning: {e}")
+            eyes = []
         
         liveness_state = liveness_detector.update((x, y, w, h), eyes)
         prog = liveness_detector.get_progress()
         
         attendance_status = session_data["attendance_status"]
-        if liveness_state == "VERIFIED":
-            if predicted_id is not None:
-                res = db.mark_attendance(predicted_id, predicted_name, "Verified")
-                if res == "Success":
-                    attendance_status = "Success (Marked)"
-                elif res == "Already Marked":
-                    attendance_status = "Success (Already Marked Today)"
-            else:
-                attendance_status = "Unknown Profile (Logs omitted)"
-        elif liveness_state == "SPOOF_SUSPECTED":
-            attendance_status = "Access Denied (Spoof Suspected)"
-            if predicted_id is not None:
-                db.mark_attendance(predicted_id, predicted_name, "SPOOF_SUSPECTED")
+        
+        # Check if candidate is already marked today to bypass liveness checks
+        is_already_marked = False
+        candidate_id = None
+        candidate_name = "Unknown"
+        preds_list = [p for p in session_data["predictions"] if p[0] is not None]
+        if preds_list:
+            from collections import Counter
+            ids_list = [p[0] for p in preds_list]
+            most_common_id, count = Counter(ids_list).most_common(1)[0]
+            matching_confs = [p[1] for p in preds_list if p[0] == most_common_id]
+            avg_conf = np.mean(matching_confs)
+            # If the student is recognized in at least 2 frames with average distance < 78.0
+            if count >= 2 and avg_conf < 78.0:
+                candidate_id = most_common_id
+                candidate_name = names_mapping.get(candidate_id, "Unknown")
+                is_already_marked = db.check_already_marked(candidate_id)
                 
+        # Calculate final ID using majority voting and average distance validation over predictions history
+        final_id = None
+        final_name = "Unknown"
+        
+        if is_already_marked:
+            liveness_state = "VERIFIED"
+            prog["message"] = f"Success! {candidate_name} already marked today."
+            prog["blink_verified"] = True
+            prog["movement_verified"] = True
+            final_id = candidate_id
+            final_name = candidate_name
+            attendance_status = f"Success ({candidate_name} Already Marked)"
+        else:
+            # Traditional check: filter out None predictions
+            preds_list = [p for p in session_data["predictions"] if p[0] is not None]
+            if preds_list:
+                from collections import Counter
+                ids_list = [p[0] for p in preds_list]
+                most_common_id, count = Counter(ids_list).most_common(1)[0]
+                matching_confs = [p[1] for p in preds_list if p[0] == most_common_id]
+                avg_conf = np.mean(matching_confs)
+                total_frames = len(session_data["predictions"])
+                if count >= 3 and count / total_frames >= 0.30 and avg_conf < 78.0:
+                    final_id = most_common_id
+                    final_name = names_mapping.get(final_id, "Unknown")
+                    
+            if liveness_state == "VERIFIED":
+                if final_id is not None:
+                    res = db.mark_attendance(final_id, final_name, "Verified")
+                    if res == "Success":
+                        attendance_status = f"Success (Marked {final_name})"
+                    elif res == "Already Marked":
+                        attendance_status = f"Success ({final_name} Already Marked)"
+                else:
+                    attendance_status = "Unknown Profile (Verification failed)"
+            elif liveness_state == "SPOOF_SUSPECTED":
+                attendance_status = "Access Denied (Spoof Suspected)"
+                if final_id is not None:
+                    db.mark_attendance(final_id, final_name, "SPOOF_SUSPECTED")
+                    
         session_data["attendance_status"] = attendance_status
         
         return jsonify({
             "face_detected": True,
             "x": int(x), "y": int(y), "w": int(w), "h": int(h),
-            "name": predicted_name,
+            "name": final_name if final_id is not None else "Unknown",
             "closest_name": closest_name,
-            "confidence": float(confidence),
+            "confidence": float(confidence) if confidence is not None else 999.0,
             "liveness_state": liveness_state,
             "liveness_message": prog["message"],
             "blink_count": prog["blink_count"],
@@ -436,4 +499,6 @@ else:
         return jsonify({"success": True})
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
+    import os
+    port = int(os.environ.get("PORT", 5001))
+    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)

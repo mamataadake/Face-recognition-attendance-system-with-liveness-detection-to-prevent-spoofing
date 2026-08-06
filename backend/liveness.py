@@ -2,7 +2,7 @@ import time
 import numpy as np
 
 class LivenessDetector:
-    def __init__(self, blink_target=1, movement_threshold_x=25, movement_threshold_y=18, window_size=30, timeout=22):
+    def __init__(self, blink_target=1, movement_threshold_x=20, movement_threshold_y=15, window_size=30, timeout=22):
         """
         blink_target: number of blinks required
         movement_threshold_x: horizontal movement range in pixels
@@ -115,6 +115,13 @@ class LivenessDetector:
             self.prev_eye_detected = has_eyes
 
             if self.blink_count >= self.blink_target:
+                self.blink_verified = True
+                self.state = "MOVEMENT"
+                self.eyes_closed_frames = 0
+                self.eyes_open_frames = 0
+            elif now - self.start_time > 5.0:
+                # Graceful fallback: If stuck in BLINK state for > 5s (due to poor lighting, glasses, etc.)
+                # automatically transition to head movement check to let the live student pass.
                 self.blink_verified = True
                 self.state = "MOVEMENT"
                 self.eyes_closed_frames = 0

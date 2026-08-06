@@ -46,17 +46,15 @@ face_recognition_attendance/
 
 ## ⚙️ Installation & Setup (Windows)
 
-We will use your existing Desktop virtual environment containing the pre-installed OpenCV `contrib` package (with face modules), NumPy, Pillow, and Pandas.
-
 ### Step 1: Open PowerShell and navigate to the project directory
 ```powershell
 cd "C:\Users\Mamata Adake\.gemini\antigravity\scratch\face_recognition_attendance"
 ```
 
 ### Step 2: Install project dependencies in your environment
-Install Flask and other dependencies listed in `requirements.txt` using your virtual environment's pip:
+Install Flask and other dependencies listed in `requirements.txt` using the project's virtual environment's pip:
 ```powershell
-& "C:\Users\Mamata Adake\Desktop\Face_Attendance_AI\venv\Scripts\pip.exe" install -r requirements.txt
+.\venv\Scripts\pip install -r requirements.txt
 ```
 
 ---
@@ -66,14 +64,14 @@ Install Flask and other dependencies listed in `requirements.txt` using your vir
 ### Step 1: Start the Flask Backend Server
 Run the web application:
 ```powershell
-& "C:\Users\Mamata Adake\Desktop\Face_Attendance_AI\venv\Scripts\python.exe" backend/app.py
+.\venv\Scripts\python app.py
 ```
 On startup, the system will read `./dataset`, detect the existing folders (`1_Mamata`, `2_Samarth`, `3_Harsh`), and register them into the database automatically.
 
 ### Step 2: Access the Dashboard
 Open your web browser and navigate to:
 ```url
-http://localhost:5000
+http://localhost:5001
 ```
 
 ### Step 3: Train the Model
